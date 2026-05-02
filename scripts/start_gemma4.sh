@@ -50,18 +50,22 @@ MODEL="google/gemma-4-E4B-it"
 SERVED_NAME="gemma-4-e4b-it"
 PORT=8000
 
-# Gemma 4 supports up to 128k tokens; reduce if you hit OOM
-MAX_MODEL_LEN=32768
+# Gemma 4 supports up to 128k tokens, but KV cache scales with context length.
+# For shared-GPU setups, start lower (e.g. 4096-8192).
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
 
 # GPU memory fraction (0.0–1.0)
-GPU_MEM_UTIL=0.90
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.7}"
 
 # Tensor parallelism — set to 2+ for 31B on multi-GPU
-TENSOR_PARALLEL=1
+TENSOR_PARALLEL="${TENSOR_PARALLEL:-1}"
+
+# Lower concurrency reduces KV cache pressure.
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 
 # Vision token budget per image — valid values: 70 140 280 560 1120
 # Higher = more detail, more memory; lower = faster
-MAX_SOFT_TOKENS=560
+MAX_SOFT_TOKENS="${MAX_SOFT_TOKENS:-280}"
 
 # Max images / audio per request (audio requires vllm[audio])
 MM_LIMITS='{"image": 4, "audio": 1}'
@@ -71,12 +75,14 @@ MM_LIMITS='{"image": 4, "audio": 1}'
 # ============================================================================
 echo "Starting Gemma 4 server: $MODEL on port $PORT"
 echo "Using vllm binary: $VENV_VLLM"
+echo "Memory profile: gpu_mem_util=$GPU_MEM_UTIL max_model_len=$MAX_MODEL_LEN max_num_seqs=$MAX_NUM_SEQS max_soft_tokens=$MAX_SOFT_TOKENS"
 
 exec "$VENV_VLLM" serve "$MODEL" \
   --served-model-name "$SERVED_NAME" \
   --port "$PORT" \
   --max-model-len "$MAX_MODEL_LEN" \
   --gpu-memory-utilization "$GPU_MEM_UTIL" \
+  --max-num-seqs "$MAX_NUM_SEQS" \
   --tensor-parallel-size "$TENSOR_PARALLEL" \
   --tool-call-parser gemma4 \
   --enable-auto-tool-choice \

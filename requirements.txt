@@ -1,0 +1,11 @@
+vllm[audio]
+transformers
+torch
+torchvision
+gradio
+gtts
+numpy
+pillow
+matplotlib
+openai
+pytest
