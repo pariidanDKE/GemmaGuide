@@ -1,5 +1,8 @@
 # my git ignore:
 data/
+notebooks/unsloth_compiled_cache
+.claude/
+.specify/
 
 # Python Template:
 
