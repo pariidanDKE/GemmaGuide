@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import io
 import json
 import logging
@@ -29,19 +30,29 @@ GEMMA_IMAGE_MULTIPLE = 48
 
 SYSTEM_PROMPT = """\
 You are SpatialSense, a navigation assistant for a blind user.
-Use structured tool calls only. Never emit raw tool protocol tokens in text.
+
+Conversation style:
+- Be friendly, calm, and conversational.
+- Speak naturally; do not dump raw tool output or read JSON-like fields verbatim.
+- Synthesize tool results into short, useful guidance.
+
 
 Tool policy:
-1. For any spatial/object query, always call search_seg_classes first using the target noun from the user request.
-2. Then call call_dpt_head.
-3. Then call measure_object with the best class_name from search results and a tight box_2d for the target.
-4. If measure_object returns a no-overlap error, choose a tighter box around the same target and retry once.
+1. Use tools when measurements are needed for safe navigation, when the user explicitly asks for distance/location of an object, or when uncertainty is high.
+2. If the user directly asks for distance/location of a specific object, call search_seg_classes first, then call_dpt_head, then measure_object.
+3. If measure_object returns a no-overlap error, choose a tighter box around the same target and retry once.
+4. For multi-object questions, you may issue multiple measure_object tool calls in the same turn when useful.
+5. If exact distance is not necessary, you may describe relevant visible objects naturally without forcing measurement for every item.
 
 Response policy:
-- Prioritize actionable navigation language.
-- Include BOTH distance and direction whenever available.
-- Direction should be plain language (left/right/ahead) and can include relative bearing if helpful.
-- Keep responses concise and safety-oriented.
+- Prioritize what matters most for safe movement: nearby obstacles, openings/pathways, and objects likely relevant for immediate navigation.
+- Decide whether to emphasize distance or presence based on relevance:
+    use distance when it helps movement decisions; use presence when exact distance is less critical.
+- Include both distance and direction when available and relevant.
+- Treat bearing_deg as camera-relative angle from the current view centerline (POV), not global 360 orientation.
+- Convert bearing into natural phrasing grounded in the current view (degrees are preferred, plain language optional).
+- Keep responses concise, safety-oriented, and practical.
+- For broad scene questions, include: (a) one immediate safety cue, (b) one closest relevant object or pathway cue, and (c) one optional next-step question to guide the user.
 """
 SYSTEM_PROMPT = os.getenv("SPATIALSENSE_SYSTEM_PROMPT", SYSTEM_PROMPT)
 
@@ -180,9 +191,46 @@ def _dispatch_tool(name: str, args: dict[str, Any], session: Session) -> str:
         result = {"error": str(exc)}
 
     latency = round(time.monotonic() - t0, 3)
+    logger.info("tool=%s latency=%.3fs", name, latency)
     if print_tool_io:
         print(f"TOOL_OUTPUT {name}: {json.dumps(result, ensure_ascii=True)}")
     return json.dumps(result)
+
+
+def _dispatch_tool_calls(
+    tool_calls: list[Any],
+    session: Session,
+) -> list[dict[str, str]]:
+    """Dispatch tool calls and return tool-role messages in the same call order."""
+    parsed_calls: list[tuple[str, str, dict[str, Any]]] = []
+    for tc in tool_calls:
+        try:
+            args = json.loads(tc.function.arguments)
+        except json.JSONDecodeError:
+            args = {}
+        parsed_calls.append((tc.id, tc.function.name, args))
+
+    # Safely parallelize only when all calls are read-only measurement calls.
+    all_measure = bool(parsed_calls) and all(name == "measure_object" for _, name, _ in parsed_calls)
+    if all_measure and len(parsed_calls) > 1:
+        max_workers = min(4, len(parsed_calls))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(_dispatch_tool, name, args, session)
+                for _, name, args in parsed_calls
+            ]
+            results = [f.result() for f in futures]
+    else:
+        results = [_dispatch_tool(name, args, session) for _, name, args in parsed_calls]
+
+    return [
+        {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": result,
+        }
+        for (call_id, _, _), result in zip(parsed_calls, results)
+    ]
 
 
 def run_agent_loop(session: Session) -> str:
@@ -197,6 +245,7 @@ def run_agent_loop(session: Session) -> str:
             "messages": messages,
             "tools": tools,
             "tool_choice": "auto",
+            "parallel_tool_calls": True,
             "max_tokens": MAX_TOKENS,
             "extra_body": {
                 "chat_template_kwargs": {
@@ -233,17 +282,11 @@ def run_agent_loop(session: Session) -> str:
             }
             messages.append(assistant_msg)
 
-            for tc in choice.message.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    args = {}
-                tool_result = _dispatch_tool(tc.function.name, args, session)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": tool_result,
-                })
+            tool_messages = _dispatch_tool_calls(
+                choice.message.tool_calls,
+                session,
+            )
+            messages.extend(tool_messages)
             continue
 
         content = choice.message.content or ""

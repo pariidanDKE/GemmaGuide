@@ -328,7 +328,7 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
         "distance_m": round(distance_m, 3),
         "bearing_deg": bearing_rounded,
         "confidence": confidence,
-        "bearing_interpretation": "Negative bearing means left, positive means right, near zero means ahead.",
+        "bearing_interpretation": "bearing_deg is camera-relative from the current POV centerline: negative is counterclockwise from center, positive is clockwise, near zero is near center.",
     }
 
 

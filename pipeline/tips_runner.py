@@ -13,6 +13,7 @@ from transformers import AutoModel
 
 # Input resolution for TIPSv2 — both dims rounded to multiples of 14 (ViT-B/14 patch size)
 # 448 = training resolution, 896 = 2x for finer depth. Reduce to 448 if OOM.
+# 896 is the previously stable multiple-of-14 setting used in earlier runs.
 TIPSV2_SHORT_SIDE = 896
 
 # Colormap used for demo depth display — set after empirical comparison (T019)
