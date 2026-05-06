@@ -21,17 +21,23 @@ class Session:
     depth_colormap: Optional[Image.Image] = field(default=None)
     spatial_report: Optional[str] = field(default=None)
 
+    measurements: list[dict] = field(default_factory=list)
+
     def release(self) -> None:
         self.depth_tensor = None
         self.seg_mask = None
 
 
-def create_session(image: Image.Image, question: str | bytes) -> Session:
+def create_session(
+    image: Image.Image,
+    question: str | bytes,
+    intrinsics: CameraIntrinsics | None = None,
+) -> Session:
     if image.mode != "RGB":
         image = image.convert("RGB")
     return Session(
         session_id=str(uuid.uuid4()),
         image=image,
         question=question,
-        intrinsics=extract_intrinsics(image),
+        intrinsics=intrinsics if intrinsics is not None else extract_intrinsics(image),
     )

@@ -34,17 +34,12 @@ def _numpy_to_wav_bytes(audio_np: tuple[int, np.ndarray] | None) -> bytes | None
 
 def _tts_to_numpy(text: str) -> tuple[int, np.ndarray] | None:
     try:
+        from pydub import AudioSegment
         audio_bytes = synthesize(text)
-        buf = io.BytesIO(audio_bytes)
-        try:
-            with wave.open(buf, "rb") as wf:
-                sr = wf.getframerate()
-                frames = wf.readframes(wf.getnframes())
-                return sr, np.frombuffer(frames, dtype=np.int16)
-        except Exception:
-            # gTTS outputs MP3 — return as raw uint8 cast at 24kHz
-            buf.seek(0)
-            return 24000, np.frombuffer(audio_bytes, dtype=np.uint8).astype(np.int16)
+        seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format="mp3")
+        seg = seg.set_channels(1).set_sample_width(2)
+        samples = np.array(seg.get_array_of_samples(), dtype=np.int16)
+        return seg.frame_rate, samples
     except Exception as exc:
         logger.warning("TTS failed: %s", exc)
         return None
@@ -147,4 +142,4 @@ with gr.Blocks(title="SpatialSense — Blind Navigation Assistant") as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(server_name="0.0.0.0")

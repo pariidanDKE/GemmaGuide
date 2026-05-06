@@ -55,7 +55,7 @@ PORT=8000
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
 
 # GPU memory fraction (0.0–1.0)
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.7}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.6}"
 
 # Tensor parallelism — set to 2+ for 31B on multi-GPU
 TENSOR_PARALLEL="${TENSOR_PARALLEL:-1}"
@@ -79,6 +79,7 @@ echo "Memory profile: gpu_mem_util=$GPU_MEM_UTIL max_model_len=$MAX_MODEL_LEN ma
 
 exec "$VENV_VLLM" serve "$MODEL" \
   --served-model-name "$SERVED_NAME" \
+  --quantization fp8 \
   --port "$PORT" \
   --max-model-len "$MAX_MODEL_LEN" \
   --gpu-memory-utilization "$GPU_MEM_UTIL" \

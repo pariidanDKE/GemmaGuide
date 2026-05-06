@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import logging
-from math import atan2, degrees
+from math import atan2, degrees, radians, tan
 import os
 from pathlib import Path
+import re
 import time
 
 import numpy as np
 import torch
 import matplotlib.cm as cm
+import matplotlib.pyplot as plt
 from PIL import Image, ImageDraw
 
 from pipeline.session import Session
@@ -23,6 +25,11 @@ _BOX_DEBUG_DIR = os.getenv(
     "SPATIALSENSE_BOX_DEBUG_DIR",
     str(_REPO_ROOT / "data" / "media" / "debug_boxes"),
 )
+
+
+def _safe_slug(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", value.strip().lower())
+    return slug.strip("_") or "unknown"
 
 
 def _session_debug_dir(session: Session) -> Path | None:
@@ -47,31 +54,113 @@ def _normalize_box_to_original_coords(box_2d: list[int], image_w: int, image_h: 
     ]
 
 
-def _save_box_debug_image(
-    session: Session,
-    class_name: str,
-    box_2d: list[int],
-) -> str | None:
-    """Save the original image with the tool-call box drawn for debugging."""
-    out_dir = _session_debug_dir(session)
-    if out_dir is None:
-        return None
+def _top_classes_in_box(seg_mask: torch.Tensor, ymin: int, xmin: int, ymax: int, xmax: int, top_k: int = 5) -> list[dict[str, int | str]]:
+    """Return top ADE classes by pixel count within the selected DPT-space bbox."""
+    box = seg_mask[ymin:ymax, xmin:xmax]
+    if box.numel() == 0:
+        return []
 
+    values, counts = torch.unique(box, return_counts=True)
+    pairs = sorted(
+        ((int(v.item()), int(c.item())) for v, c in zip(values, counts)),
+        key=lambda t: t[1],
+        reverse=True,
+    )
+    result: list[dict[str, int | str]] = []
+    for cls_idx, pixel_count in pairs[:top_k]:
+        if 0 <= cls_idx < len(ADE20K_CLASSES):
+            cls_name = ADE20K_CLASSES[cls_idx]
+        else:
+            cls_name = f"class_{cls_idx}"
+        result.append({"class_name": cls_name, "pixel_count": pixel_count, "class_idx": cls_idx})
+    return result
+
+
+def _draw_text_badge(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str) -> None:
+    """Draw high-contrast text with a dark background for readability."""
+    x, y = xy
     try:
-        ymin, xmin, ymax, xmax = box_2d
-        vis = session.image.copy()
-        draw = ImageDraw.Draw(vis)
-        draw.rectangle((xmin, ymin, xmax, ymax), outline=(255, 0, 0), width=5)
-        label = f"{class_name} box"
-        label_y = max(0, ymin - 22)
-        draw.text((xmin + 6, label_y), label, fill=(255, 0, 0))
-
-        ts = int(time.time() * 1000)
-        out_path = out_dir / f"{session.session_id}_{class_name}_{ts}.png"
-        vis.save(out_path)
-        return str(out_path)
+        bbox = draw.textbbox((x, y), text)
+        pad = 3
+        draw.rectangle(
+            (
+                bbox[0] - pad,
+                bbox[1] - pad,
+                bbox[2] + pad,
+                bbox[3] + pad,
+            ),
+            fill=(0, 0, 0),
+        )
     except Exception:
-        return None
+        # Fallback for older Pillow versions without textbbox.
+        w = int(len(text) * 7.5)
+        h = 14
+        draw.rectangle((x - 3, y - 3, x + w + 3, y + h + 3), fill=(0, 0, 0))
+    draw.text((x, y), text, fill=(255, 255, 255))
+
+
+def _add_depth_legend_panel(image: Image.Image, d_min: float, d_max: float) -> Image.Image:
+    """Attach a readable depth legend panel to the right side of an image."""
+    base = image.convert("RGB")
+    W, H = base.size
+
+    panel_w = 180
+    outer_pad = 10
+    bar_w = 32
+    bar_top = outer_pad + 20
+    bar_bottom = H - outer_pad - 20
+    bar_h = max(40, bar_bottom - bar_top)
+    bar_left = W + outer_pad + 14
+    bar_right = bar_left + bar_w
+
+    canvas = Image.new("RGB", (W + panel_w, H), (18, 18, 18))
+    canvas.paste(base, (0, 0))
+
+    draw = ImageDraw.Draw(canvas)
+    _draw_text_badge(draw, (W + outer_pad, outer_pad), "Depth (m)")
+
+    # Build a vertical plasma color bar: top=max depth, bottom=min depth.
+    bar = np.zeros((bar_h, bar_w, 3), dtype=np.uint8)
+    for y in range(bar_h):
+        t = 1.0 - (y / max(bar_h - 1, 1))
+        rgb = (np.array(cm.plasma(t)[:3]) * 255.0).astype(np.uint8)
+        bar[y, :, :] = rgb
+    bar_img = Image.fromarray(bar, mode="RGB")
+    canvas.paste(bar_img, (bar_left, bar_top))
+
+    draw.rectangle((bar_left - 1, bar_top - 1, bar_right + 1, bar_top + bar_h + 1), outline=(230, 230, 230), width=1)
+
+    # Tick labels with background badges for high contrast.
+    ticks = [1.0, 0.75, 0.5, 0.25, 0.0]
+    for frac in ticks:
+        y = int(round(bar_top + (1.0 - frac) * (bar_h - 1)))
+        value = d_min + frac * (d_max - d_min)
+        draw.line((bar_right + 5, y, bar_right + 13, y), fill=(240, 240, 240), width=1)
+        _draw_text_badge(draw, (bar_right + 18, max(0, y - 8)), f"{value:.2f}")
+
+    return canvas
+
+
+def _save_depth_colormap_with_matplotlib(depth_2d: torch.Tensor, out_path: Path) -> None:
+    """Save depth map with a standard matplotlib colorbar for clear, readable values."""
+    depth_np = depth_2d.detach().cpu().numpy().astype(np.float32)
+    h, w = depth_np.shape
+
+    # Keep figure size proportional to the map while staying readable.
+    fig_w = max(6.0, w / 180.0)
+    fig_h = max(4.0, h / 180.0)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=140)
+    im = ax.imshow(depth_np, cmap="plasma")
+    ax.set_title("Depth Map", fontsize=14)
+    ax.axis("off")
+
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label("Depth (m)", rotation=270, labelpad=16, fontsize=12)
+    cbar.ax.tick_params(labelsize=11)
+
+    fig.tight_layout()
+    fig.savefig(out_path, bbox_inches="tight", pad_inches=0.08)
+    plt.close(fig)
 
 
 def _save_depth_and_seg_debug_images(session: Session) -> None:
@@ -82,12 +171,11 @@ def _save_depth_and_seg_debug_images(session: Session) -> None:
     try:
         ts = int(time.time() * 1000)
 
-        # Depth debug image
-        depth_vis = session.depth_colormap.convert("RGB")
-        if depth_vis.size != session.image.size:
-            depth_vis = depth_vis.resize(session.image.size, resample=Image.BILINEAR)
-        depth_out = out_dir / f"{session.session_id}_depth_{ts}.png"
-        depth_vis.save(depth_out)
+        # Depth debug image: plain matplotlib colorbar for maximum readability.
+        if session.depth_tensor is not None:
+            depth_2d = session.depth_tensor.squeeze()
+            depth_out = out_dir / f"depth_colormap_with_legend__ts-{ts}.png"
+            _save_depth_colormap_with_matplotlib(depth_2d, depth_out)
 
         # Segmentation overlay debug image
         seg = session.seg_mask.detach().cpu().to(torch.int64)
@@ -99,7 +187,7 @@ def _save_depth_and_seg_debug_images(session: Session) -> None:
         if seg_img.size != session.image.size:
             seg_img = seg_img.resize(session.image.size, resample=Image.NEAREST)
         seg_overlay = Image.blend(session.image, seg_img, alpha=0.45)
-        seg_out = out_dir / f"{session.session_id}_seg_overlay_{ts}.png"
+        seg_out = out_dir / f"segmentation_overlay__ts-{ts}.png"
         seg_overlay.save(seg_out)
     except Exception:
         return
@@ -108,6 +196,10 @@ def _save_depth_and_seg_debug_images(session: Session) -> None:
 def _save_measurement_debug_overlay(
     session: Session,
     class_name: str,
+    requested_class_name: str,
+    class_substituted: bool,
+    box_original: list[int],
+    original_size: tuple[int, int],
     box_dpt: list[int],
     mask: torch.Tensor,
     class_region: torch.Tensor,
@@ -151,30 +243,69 @@ def _save_measurement_debug_overlay(
         d_min = float(depth_2d.min().item())
         d_max = float(depth_2d.max().item())
         selected_count = int(mask.sum().item())
-        draw.text((8, 8), f"class={class_name} selected_px={selected_count}", fill=(255, 255, 255))
+        draw = ImageDraw.Draw(vis)
+        _draw_text_badge(draw, (8, 8), f"class={class_name} selected_px={selected_count}")
+        _draw_text_badge(draw, (8, 30), f"box_dpt=[{ymin},{xmin},{ymax},{xmax}] on {W}x{H}")
+        if class_substituted:
+            _draw_text_badge(draw, (8, 52), f"FALLBACK: requested={requested_class_name} -> used={class_name}")
+            badge_y = 74
+        else:
+            _draw_text_badge(draw, (8, 52), "FALLBACK: no")
+            badge_y = 74
+        oymin, oxmin, oymax, oxmax = box_original
+        orig_w, orig_h = original_size
+        _draw_text_badge(
+            draw,
+            (8, badge_y),
+            f"box_original=[{oymin},{oxmin},{oymax},{oxmax}] on {orig_w}x{orig_h}",
+        )
 
-        # Draw a color legend that matches the plasma depth mapping.
-        legend_w = 64
-        legend_pad = 12
-        legend = np.zeros((H, legend_w, 3), dtype=np.uint8)
-        for y in range(H):
-            t = 1.0 - (y / max(H - 1, 1))
-            rgb = (np.array(cm.plasma(t)[:3]) * 255.0).astype(np.uint8)
-            legend[y, :, :] = rgb
-        legend_img = Image.fromarray(legend, mode="RGB")
+        canvas = _add_depth_legend_panel(vis, d_min, d_max)
 
-        canvas = Image.new("RGB", (W + legend_w + legend_pad + 8, H), (20, 20, 20))
-        canvas.paste(vis, (0, 0))
-        canvas.paste(legend_img, (W + legend_pad, 0))
+        class_slug = _safe_slug(class_name)
 
-        cdraw = ImageDraw.Draw(canvas)
-        cdraw.text((W + legend_pad + 4, 4), f"{d_max:.2f} m", fill=(255, 255, 255))
-        cdraw.text((W + legend_pad + 4, max(H - 18, 0)), f"{d_min:.2f} m", fill=(255, 255, 255))
-        cdraw.text((W + legend_pad + 4, max(H // 2 - 8, 0)), "depth", fill=(255, 255, 255))
+        # Exact image grid used for extraction (DPT-space RGB with box)
+        source_grid = session.image.resize((W, H), resample=Image.BILINEAR).convert("RGB")
+        sdraw = ImageDraw.Draw(source_grid)
+        sdraw.rectangle((xmin, ymin, xmax, ymax), outline=(255, 0, 0), width=3)
+        _draw_text_badge(sdraw, (8, 8), "EXACT GRID USED FOR EXTRACTION (DPT SPACE)")
+        _draw_text_badge(sdraw, (8, 30), f"class={class_name}")
+        if class_substituted:
+            _draw_text_badge(sdraw, (8, 52), f"FALLBACK: requested={requested_class_name} -> used={class_name}")
+            src_box_y = 74
+        else:
+            _draw_text_badge(sdraw, (8, 52), "FALLBACK: no")
+            src_box_y = 74
+        _draw_text_badge(sdraw, (8, src_box_y), f"box_dpt=[{ymin},{xmin},{ymax},{xmax}] on {W}x{H}")
+
+        # Combined mask: class region + selected-pixel intersection in one image.
+        class_count = int(class_np.sum())
+        combined_mask_np = np.zeros((H, W, 3), dtype=np.uint8)
+        combined_mask_np[class_np] = np.array([0, 220, 255], dtype=np.uint8)  # class region
+        combined_mask_np[mask_np] = np.array([255, 255, 255], dtype=np.uint8)  # selected intersection
+        combined_mask = Image.fromarray(combined_mask_np, mode="RGB")
+        cmask_draw = ImageDraw.Draw(combined_mask)
+        _draw_text_badge(cmask_draw, (8, 8), "CLASS REGION=CYAN, SELECTED INTERSECTION=WHITE")
+        _draw_text_badge(cmask_draw, (8, 30), f"class={class_name}")
+        if class_substituted:
+            _draw_text_badge(cmask_draw, (8, 52), f"FALLBACK: requested={requested_class_name} -> used={class_name}")
+            stat_y0 = 74
+        else:
+            _draw_text_badge(cmask_draw, (8, 52), "FALLBACK: no")
+            stat_y0 = 74
+        _draw_text_badge(cmask_draw, (8, stat_y0), f"class_region_px={class_count}")
+        _draw_text_badge(cmask_draw, (8, stat_y0 + 22), f"selected_px={selected_count}")
+        _draw_text_badge(
+            cmask_draw,
+            (8, stat_y0 + 44),
+            f"selection_ratio={selected_count / max(class_count, 1):.4f}",
+        )
 
         ts = int(time.time() * 1000)
-        out_path = out_dir / f"{session.session_id}_{class_name}_measure_overlay_{ts}.png"
+        out_path = out_dir / f"measure_overlay_with_legend__class-{class_slug}__ts-{ts}.png"
         canvas.save(out_path)
+        source_grid.save(out_dir / f"measure_source_grid_dpt__class-{class_slug}__ts-{ts}.png")
+        combined_mask.save(out_dir / f"measure_combined_mask__class-{class_slug}__ts-{ts}.png")
         return str(out_path)
     except Exception:
         return None
@@ -188,6 +319,51 @@ def search_seg_classes(query: str) -> dict:
     return {"matches": matches}
 
 
+_SAFETY_CUE_DISTANCE_M = 2.0
+_SAFETY_CUE_BEARING_DEG = 5.0
+_SKIP_CLASSES = {"wall", "floor", "ceiling", "sky"}
+
+
+def _compute_safety_cues(
+    depth_tensor: torch.Tensor,
+    seg_mask: torch.Tensor,
+    detected: list[str],
+    session: Session,
+) -> list[dict]:
+    H, W = seg_mask.shape
+    orig_w, _ = session.image.size
+    scale_x = W / float(orig_w)
+    cx_dpt = session.intrinsics.cx * scale_x
+    fx_dpt = session.intrinsics.fx * scale_x
+
+    half_width = fx_dpt * tan(radians(_SAFETY_CUE_BEARING_DEG))
+    x_lo = max(0, int(round(cx_dpt - half_width)))
+    x_hi = min(W, int(round(cx_dpt + half_width)))
+    if x_hi <= x_lo:
+        return []
+
+    depth_2d = depth_tensor.squeeze()
+    forward_col_mask = torch.zeros(H, W, dtype=torch.bool)
+    forward_col_mask[:, x_lo:x_hi] = True
+
+    cues = []
+    for cls_name in detected:
+        if cls_name in _SKIP_CLASSES:
+            continue
+        try:
+            cls_idx = ADE20K_CLASSES.index(cls_name)
+        except ValueError:
+            continue
+        class_mask = (seg_mask == cls_idx) & forward_col_mask
+        if class_mask.sum() < 10:
+            continue
+        dist_m = float(depth_2d[class_mask].median().item())
+        if dist_m < _SAFETY_CUE_DISTANCE_M:
+            cues.append({"class_name": cls_name, "approx_distance_m": round(dist_m, 2)})
+
+    return sorted(cues, key=lambda c: c["approx_distance_m"])
+
+
 # ── T009: call_dpt_head ──────────────────────────────────────────────────────
 
 def call_dpt_head(session: Session) -> dict:
@@ -197,15 +373,23 @@ def call_dpt_head(session: Session) -> dict:
     session.seg_mask = seg_mask
     session.depth_colormap = depth_colormap
     _save_depth_and_seg_debug_images(session)
+    debug_dir = _session_debug_dir(session)
+    if debug_dir:
+        logger.info("debug_dir=%s", debug_dir)
     detected = get_detected_classes(seg_mask)
+    safety_cues = _compute_safety_cues(depth_tensor, seg_mask, detected, session)
     logger.info(
-        "tool=call_dpt_head depth_shape=%s seg_shape=%s detected=%s latency=%.3fs",
+        "tool=call_dpt_head depth_shape=%s seg_shape=%s detected=%s safety_cues=%s latency=%.3fs",
         tuple(depth_tensor.shape),
         tuple(seg_mask.shape),
         len(detected),
+        len(safety_cues),
         time.monotonic() - t0,
     )
-    return {"status": "ready", "detected_classes": detected}
+    result: dict = {"status": "ready", "detected_classes": detected}
+    if safety_cues:
+        result["safety_cues"] = safety_cues
+    return result
 
 
 # ── T010: measure_object ─────────────────────────────────────────────────────
@@ -213,7 +397,6 @@ def call_dpt_head(session: Session) -> dict:
 def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict:
     orig_w, orig_h = session.image.size
     box_original = _normalize_box_to_original_coords(box_2d, orig_w, orig_h)
-    _save_box_debug_image(session, class_name, box_original)
 
     if session.depth_tensor is None or session.seg_mask is None:
         return {"error": "call_dpt_head or call_encoder_zero_shot must be called first"}
@@ -264,9 +447,16 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
     box_dpt = [ymin, xmin, ymax, xmax]
 
     # Build pixel mask
+    box_top_classes: list[dict[str, int | str]] = []
+    requested_class_in_box_pixels: int | None = None
+    used_class_in_box_pixels: int | None = None
+    used_class_name = class_name
+    class_substituted = False
+    box_region = torch.zeros(H, W, dtype=torch.bool)
+    box_region[ymin:ymax, xmin:xmax] = True
+
     if cosine_map is not None:
         # Zero-shot path: threshold cosine similarity within the box
-        # Resize cosine_map to seg_mask spatial resolution if needed
         if cosine_map.shape != (H, W):
             cosine_map_resized = torch.nn.functional.interpolate(
                 cosine_map.unsqueeze(0).unsqueeze(0).float(),
@@ -276,47 +466,79 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
             ).squeeze()
         else:
             cosine_map_resized = cosine_map.float()
-        box_region = torch.zeros(H, W, dtype=torch.bool)
-        box_region[ymin:ymax, xmin:xmax] = True
         mask = box_region & (cosine_map_resized > 0.2)
         class_region = cosine_map_resized > 0.2
-    else:
+
+    if cosine_map is None or mask.sum() == 0:
+        # ADE20K path (or zero-shot fallback when cosine mask is empty):
+        # use dominant segmented class in the bounding box.
         seg_mask = session.seg_mask
-        box_region = torch.zeros(H, W, dtype=torch.bool)
-        box_region[ymin:ymax, xmin:xmax] = True
-        class_region = seg_mask == class_idx
+        box_top_classes = _top_classes_in_box(seg_mask, ymin, xmin, ymax, xmax, top_k=5)
+        requested_class_in_box_pixels = int((seg_mask[ymin:ymax, xmin:xmax] == class_idx).sum().item()) if class_idx is not None else 0
+        used_class_in_box_pixels = requested_class_in_box_pixels
+
+        used_class_idx = class_idx
+        if (requested_class_in_box_pixels == 0 or class_idx is None) and box_top_classes:
+            top = box_top_classes[0]
+            used_class_idx = int(top["class_idx"])
+            used_class_name = str(top["class_name"])
+            used_class_in_box_pixels = int(top["pixel_count"])
+            class_substituted = used_class_name != class_name
+
+        class_region = seg_mask == used_class_idx if used_class_idx is not None else box_region
         mask = box_region & class_region
 
     # depth_tensor: (1,1,H,W)
     depth_2d = session.depth_tensor.squeeze()  # (H, W)
-    _save_measurement_debug_overlay(session, class_name, box_dpt, mask, class_region, depth_2d)
+    _save_measurement_debug_overlay(
+        session,
+        used_class_name,
+        class_name,
+        class_substituted,
+        box_original,
+        (orig_w, orig_h),
+        box_dpt,
+        mask,
+        class_region,
+        depth_2d,
+    )
 
     pixel_count = int(mask.sum().item())
+    class_pixel_total = int(class_region.sum().item())
+    selection_ratio = float(pixel_count / max(class_pixel_total, 1))
     if pixel_count == 0:
-        class_pixel_total = int(class_region.sum().item())
-        return {
-            "error": (
+        if class_substituted:
+            err = (
+                f"No '{used_class_name}' pixels found within the bounding box {box_original} "
+                f"after substituting requested class '{class_name}' with dominant box class '{used_class_name}'. "
+                "Please review the image and provide a tighter bounding box around the object."
+            )
+        else:
+            err = (
                 f"No '{class_name}' pixels found within the bounding box {box_original}. "
                 "Please review the image and provide a tighter bounding box around the object."
-            ),
+            )
+        out = {
+            "error": err,
             "applied_box_2d": box_original,
             "class_pixels_total": class_pixel_total,
+            "selected_pixels": pixel_count,
+            "selection_ratio": round(selection_ratio, 4),
         }
+        if box_top_classes:
+            out["box_top_classes"] = box_top_classes
+        if requested_class_in_box_pixels is not None:
+            out["requested_class_in_box_pixels"] = requested_class_in_box_pixels
+            out["requested_class_name"] = class_name
+            out["used_class_name"] = used_class_name
+            out["used_class_in_box_pixels"] = used_class_in_box_pixels
+            out["class_substituted"] = class_substituted
+        return out
     else:
         distance_m = float(depth_2d[mask].median().item())
         ys, xs = torch.where(mask)
         px = float(xs.float().mean().item())
         py = float(ys.float().mean().item())
-
-        # Confidence scoring
-        near_clip = (distance_m < 0.01) or (distance_m > 9.9)
-        out_of_range = distance_m < 0.5 or distance_m > 8.0
-        if near_clip or pixel_count < 500 or out_of_range:
-            confidence = "low"
-        elif cosine_map is not None:
-            confidence = "medium"
-        else:
-            confidence = "high"
 
     # Convert centroid back to original image coordinates for intrinsics math.
     px_orig = px * (orig_w / float(W))
@@ -324,12 +546,25 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
     bearing_deg = degrees(atan2((px_orig - session.intrinsics.cx) / session.intrinsics.fx, 1.0))
 
     bearing_rounded = round(bearing_deg, 2)
-    return {
-        "distance_m": round(distance_m, 3),
-        "bearing_deg": bearing_rounded,
-        "confidence": confidence,
-        "bearing_interpretation": "bearing_deg is camera-relative from the current POV centerline: negative is counterclockwise from center, positive is clockwise, near zero is near center.",
-    }
+    abs_bearing = abs(bearing_rounded)
+    if abs_bearing <= 10:
+        direction = "straight ahead"
+    elif bearing_rounded < 0:
+        direction = f"about {abs_bearing:.0f} degrees to your left"
+    else:
+        direction = f"about {abs_bearing:.0f} degrees to your right"
+
+    out: dict = {"class_name": used_class_name, "distance_m": round(distance_m, 3), "direction": direction}
+    if class_substituted:
+        out["note"] = f"'{class_name}' not found in box — measured nearest object instead. Distance is still valid."
+
+    session.measurements.append({
+        "class_name": used_class_name,
+        "box_original": box_original,
+        "tips_distance_m": round(distance_m, 3),
+        "mask_dpt": mask,  # (H_dpt, W_dpt) bool tensor — same pixels used for TIPS median
+    })
+    return out
 
 
 # ── T013: call_encoder_zero_shot ─────────────────────────────────────────────

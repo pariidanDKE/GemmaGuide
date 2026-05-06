@@ -12,6 +12,16 @@ class CameraIntrinsics:
     source: str  # "exif" or "assumed"
 
 
+def nyuv2_intrinsics(width: int, height: int) -> CameraIntrinsics:
+    # Kinect calibration at 640x480, scaled proportionally to any resolution
+    sx, sy = width / 640.0, height / 480.0
+    return CameraIntrinsics(
+        fx=518.8579 * sx, fy=519.4696 * sy,
+        cx=325.5824 * sx, cy=253.7362 * sy,
+        source="nyuv2",
+    )
+
+
 def extract_intrinsics(image: Image.Image) -> CameraIntrinsics:
     w, h = image.size
     try:

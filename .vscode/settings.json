@@ -1,0 +1,4 @@
+{
+  "python.defaultInterpreterPath": "/home/dan-parii/.pyenv/versions/vllm/bin/python",
+  "python.terminal.activateEnvironment": true
+}

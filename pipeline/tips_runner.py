@@ -1,20 +1,29 @@
 from __future__ import annotations
 
 import csv
+import logging
 import os
 from pathlib import Path
 
 import numpy as np
 import torch
+
+logger = logging.getLogger(__name__)
 import matplotlib.cm as cm
 from PIL import Image
 from torchvision import transforms
 from transformers import AutoModel
 
 # Input resolution for TIPSv2 — both dims rounded to multiples of 14 (ViT-B/14 patch size)
-# 448 = training resolution, 896 = 2x for finer depth. Reduce to 448 if OOM.
-# 896 is the previously stable multiple-of-14 setting used in earlier runs.
-TIPSV2_SHORT_SIDE = 896
+# 448 = training resolution, 896 = 2x for finer depth. Increase to 1024/1152 for experiments.
+# Can be overridden per run with env var SPATIALSENSE_TIPSV2_SHORT_SIDE.
+TIPSV2_SHORT_SIDE = int(os.getenv("SPATIALSENSE_TIPSV2_SHORT_SIDE", "896"))
+
+# Model selection for experiments.
+# DPT model examples: google/tipsv2-b14-dpt, google/tipsv2-l14-dpt
+# Base model examples: google/tipsv2-b14, google/tipsv2-l14
+TIPSV2_DPT_MODEL_ID = os.getenv("SPATIALSENSE_TIPSV2_DPT_MODEL", "google/tipsv2-b14-dpt")
+TIPSV2_BASE_MODEL_ID = os.getenv("SPATIALSENSE_TIPSV2_BASE_MODEL", "google/tipsv2-b14")
 
 # Colormap used for demo depth display — set after empirical comparison (T019)
 DEFAULT_COLORMAP = "plasma"
@@ -46,7 +55,7 @@ _transform = transforms.ToTensor()
 def load_model():
     global _model
     if _model is None:
-        _model = AutoModel.from_pretrained("google/tipsv2-b14-dpt", trust_remote_code=True)
+        _model = AutoModel.from_pretrained(TIPSV2_DPT_MODEL_ID, trust_remote_code=True)
         _model.eval()
         if torch.cuda.is_available():
             _model = _model.cuda()
@@ -104,9 +113,11 @@ def run_zero_shot_inference(
     image: Image.Image,
     class_list: list[str],
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor], list[str]]:
-    """Zero-shot segmentation using TIPSv2 base encoder + text encoder cosine similarity."""
-    from transformers import AutoTokenizer
+    """Zero-shot segmentation using TIPSv2 backbone encode_image + encode_text cosine similarity.
 
+    The DPT forward loads and caches the base backbone in model._backbone. We reuse it
+    here to get per-patch embeddings and text embeddings — no second model load needed.
+    """
     model = load_model()
     resized = _resize_for_tips(image, TIPSV2_SHORT_SIDE)
     pixel_values = _transform(resized).unsqueeze(0)
@@ -118,44 +129,48 @@ def run_zero_shot_inference(
 
     depth_tensor = outputs.depth.cpu()  # (1,1,H,W)
 
+    # Trigger lazy backbone load if DPT forward didn't do it (safety)
+    if getattr(model, "_backbone", None) is None:
+        model._get_backbone()
+    backbone = model._backbone
+
     cosine_maps: dict[str, torch.Tensor] = {}
     detected: list[str] = []
 
-    # Extract patch-level image embeddings from vision encoder hidden states
-    hidden = None
-    if hasattr(outputs, "hidden_states") and outputs.hidden_states:
-        hidden = outputs.hidden_states[-1]
+    try:
+        with torch.no_grad():
+            img_out = backbone.encode_image(pixel_values)
 
-    if hidden is not None:
-        num_patches = hidden.shape[1]
-        H_patch = W_patch = int(num_patches ** 0.5)
-        image_feats = hidden.squeeze(0).cpu()  # (num_patches, hidden_dim)
-        image_feats = torch.nn.functional.normalize(image_feats, dim=-1)
+        # patch_tokens: (1, N_patches, D) — per-patch spatial features
+        patch_tokens = img_out.patch_tokens.squeeze(0).cpu()  # (N, D)
+        patch_tokens = torch.nn.functional.normalize(patch_tokens, dim=-1)
 
-        try:
-            tokenizer = AutoTokenizer.from_pretrained("google/tipsv2-b14")
-            text_model = AutoModel.from_pretrained("google/tipsv2-b14", trust_remote_code=True)
-            text_model.eval()
+        # Spatial grid: ViT patch size = 14 for both b14 and l14
+        H_patch = resized.height // 14
+        W_patch = resized.width // 14
+        N_expected = H_patch * W_patch
+        if patch_tokens.shape[0] != N_expected:
+            patch_tokens = patch_tokens[:N_expected]
 
-            for cls_name in class_list:
-                text_inputs = tokenizer(
-                    [f"a photo of a {cls_name}"],
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                )
-                with torch.no_grad():
-                    text_out = text_model(**text_inputs)
-                text_feat = text_out.last_hidden_state[:, 0, :]
-                text_feat = torch.nn.functional.normalize(text_feat, dim=-1)
+        _ANCHORS = ["wall", "floor", "ceiling", "background"]
+        all_classes = list(class_list) + _ANCHORS
+        prompts = [f"a photo of a {cls}" for cls in all_classes]
+        with torch.no_grad():
+            text_embs = backbone.encode_text(prompts)  # (num_classes + anchors, D)
+        text_embs = torch.nn.functional.normalize(text_embs.cpu(), dim=-1)
 
-                sim = (image_feats @ text_feat.T).squeeze(-1)  # (num_patches,)
-                sim_map = sim.reshape(H_patch, W_patch)
-                cosine_maps[cls_name] = sim_map
+        # softmax across all classes+anchors per patch — anchors absorb background probability mass
+        all_sims = patch_tokens @ text_embs.T
+        all_probs = torch.softmax(all_sims, dim=-1)  # (N_patches, num_classes + anchors)
 
-                if sim_map.max().item() > 0.2:
-                    detected.append(cls_name)
-        except Exception:
-            pass
+        for i, cls_name in enumerate(class_list):
+            sim_map = all_probs[:, i].reshape(H_patch, W_patch)
+            cosine_maps[cls_name] = sim_map
+            max_sim = sim_map.max().item()
+            logger.info("zero_shot cls=%s max_prob=%.4f", cls_name, max_sim)
+            detected.append(cls_name)  # always include — measure_object will use box fallback if similarity is low
+
+    except Exception:
+        logger.exception("zero_shot backbone inference failed")
 
     return depth_tensor, cosine_maps, detected
