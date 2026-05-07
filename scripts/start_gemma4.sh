@@ -68,7 +68,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 MAX_SOFT_TOKENS="${MAX_SOFT_TOKENS:-280}"
 
 # Max images / audio per request (audio requires vllm[audio])
-MM_LIMITS='{"image": 4, "audio": 1}'
+MM_LIMITS='{"image": 4, "audio": 5}'
 
 # ============================================================================
 # Start vLLM Server (foreground — Ctrl+C to stop)

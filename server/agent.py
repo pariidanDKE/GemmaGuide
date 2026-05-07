@@ -196,21 +196,19 @@ def _image_to_data_url(image: Image.Image) -> str:
     return f"data:image/jpeg;base64,{b64}"
 
 
+def _build_question_content(question: str | bytes) -> list[dict]:
+    if isinstance(question, bytes):
+        b64_audio = base64.b64encode(question).decode("utf-8")
+        return [{"type": "input_audio", "input_audio": {"data": b64_audio, "format": "wav"}}]
+    return [{"type": "text", "text": question}]
+
+
 def build_messages(image: Image.Image, question: str | bytes) -> list[dict]:
     image_url = _image_to_data_url(image)
     content: list[dict] = [
         {"type": "image_url", "image_url": {"url": image_url}},
+        *_build_question_content(question),
     ]
-    if isinstance(question, bytes):
-        # Audio bytes: encode as base64 audio/wav for vLLM audio input
-        b64_audio = base64.b64encode(question).decode("utf-8")
-        content.append({
-            "type": "input_audio",
-            "input_audio": {"data": b64_audio, "format": "wav"},
-        })
-    else:
-        content.append({"type": "text", "text": question})
-
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": content},
@@ -287,10 +285,23 @@ def _dispatch_tool_calls(
     ]
 
 
-def run_agent_loop(session: Session) -> str:
+def run_agent_loop(
+    session: Session,
+    history: list[dict] | None = None,
+    send_image: bool = True,
+) -> tuple[str, list[dict]]:
     t_total = time.monotonic()
     client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
-    messages = build_messages(session.image, session.question)
+
+    if history is not None:
+        if send_image:
+            image_url = _image_to_data_url(session.image)
+            user_content = [{"type": "image_url", "image_url": {"url": image_url}}, *_build_question_content(session.question)]
+        else:
+            user_content = _build_question_content(session.question)
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history + [{"role": "user", "content": user_content}]
+    else:
+        messages = build_messages(session.image, session.question)
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         tools = _active_tools()
@@ -346,16 +357,16 @@ def run_agent_loop(session: Session) -> str:
         content = choice.message.content or ""
         if _looks_like_raw_tool_protocol(content):
             logger.warning("Model emitted raw tool-call protocol text instead of structured tool_calls")
-            return (
-                "You emitted the wrong format for the tool call. "
-                "Please retry."
-            )
+            err = "You emitted the wrong format for the tool call. Please retry."
+            return err, messages[1:]
 
         # Final text response
         final_text = content
         session.spatial_report = final_text
+        messages.append({"role": "assistant", "content": final_text})
         logger.info("agent_loop_total_latency=%.3fs rounds=%s", time.monotonic() - t_total, round_idx + 1)
-        return final_text
+        return final_text, messages[1:]
 
+    err = "I was unable to complete the spatial analysis. Please try again."
     logger.info("agent_loop_total_latency=%.3fs rounds=%s", time.monotonic() - t_total, MAX_TOOL_ROUNDS)
-    return "I was unable to complete the spatial analysis. Please try again."
+    return err, messages[1:]
