@@ -104,9 +104,21 @@ def _make_colormap(depth_np: np.ndarray) -> Image.Image:
     return Image.fromarray(colored)
 
 
-def get_detected_classes(seg_mask: torch.Tensor) -> list[str]:
-    unique_indices = seg_mask.unique().tolist()
-    return [ADE20K_CLASSES[int(i)] for i in unique_indices if 0 <= int(i) < len(ADE20K_CLASSES)]
+def get_detected_classes(seg_mask: torch.Tensor, top_k: int | None = None) -> list[str]:
+    """Return ADE20K class names present in seg_mask, sorted by pixel coverage descending.
+
+    Pass top_k to cap the list — only the top_k most-covered classes are returned.
+    When top_k is None all present classes are returned (sorted by coverage).
+    """
+    unique_indices, counts = seg_mask.unique(return_counts=True)
+    pairs = sorted(
+        ((int(i.item()), int(c.item())) for i, c in zip(unique_indices, counts)),
+        key=lambda t: t[1],
+        reverse=True,
+    )
+    if top_k is not None:
+        pairs = pairs[:top_k]
+    return [ADE20K_CLASSES[cls_idx] for cls_idx, _ in pairs if 0 <= cls_idx < len(ADE20K_CLASSES)]
 
 
 def run_zero_shot_inference(

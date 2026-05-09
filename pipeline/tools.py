@@ -26,6 +26,17 @@ _BOX_DEBUG_DIR = os.getenv(
     str(_REPO_ROOT / "data" / "media" / "debug_boxes"),
 )
 
+# How many top-coverage ADE classes to surface to Gemma via call_dpt_head.
+# Fringe classes (e.g. "armchair" with 5 stray pixels) are excluded; safety-cue
+# computation inside call_dpt_head still uses the full class list.
+_DETECTED_CLASSES_TOP_K = int(os.getenv("SPATIALSENSE_DETECTED_CLASSES_TOP_K", "5"))
+
+# Minimum number of requested-class pixels that must exist inside the bounding box
+# before we trust that class for depth measurement.  Below this threshold the
+# fallback kicks in: we measure the dominant (highest-pixel-count) class in the
+# box instead.  Set via SPATIALSENSE_MIN_CLASS_PIXELS_IN_BOX.
+_MIN_CLASS_PIXELS_IN_BOX = int(os.getenv("SPATIALSENSE_MIN_CLASS_PIXELS_IN_BOX", "500"))
+
 
 def _safe_slug(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", value.strip().lower())
@@ -376,17 +387,19 @@ def call_dpt_head(session: Session) -> dict:
     debug_dir = _session_debug_dir(session)
     if debug_dir:
         logger.info("debug_dir=%s", debug_dir)
-    detected = get_detected_classes(seg_mask)
-    safety_cues = _compute_safety_cues(depth_tensor, seg_mask, detected, session)
+    detected_all = get_detected_classes(seg_mask)
+    top_detected = get_detected_classes(seg_mask, top_k=_DETECTED_CLASSES_TOP_K)
+    safety_cues = _compute_safety_cues(depth_tensor, seg_mask, detected_all, session)
     logger.info(
-        "tool=call_dpt_head depth_shape=%s seg_shape=%s detected=%s safety_cues=%s latency=%.3fs",
+        "tool=call_dpt_head depth_shape=%s seg_shape=%s detected_all=%s top_k=%s safety_cues=%s latency=%.3fs",
         tuple(depth_tensor.shape),
         tuple(seg_mask.shape),
-        len(detected),
+        len(detected_all),
+        len(top_detected),
         len(safety_cues),
         time.monotonic() - t0,
     )
-    result: dict = {"status": "ready", "detected_classes": detected}
+    result: dict = {"status": "ready", "detected_classes": top_detected}
     if safety_cues:
         result["safety_cues"] = safety_cues
     return result
@@ -469,7 +482,7 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
         mask = box_region & (cosine_map_resized > 0.2)
         class_region = cosine_map_resized > 0.2
 
-    if cosine_map is None or mask.sum() == 0:
+    if cosine_map is None or mask.sum() < 500:
         # ADE20K path (or zero-shot fallback when cosine mask is empty):
         # use dominant segmented class in the bounding box.
         seg_mask = session.seg_mask
@@ -478,7 +491,7 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
         used_class_in_box_pixels = requested_class_in_box_pixels
 
         used_class_idx = class_idx
-        if (requested_class_in_box_pixels == 0 or class_idx is None) and box_top_classes:
+        if (requested_class_in_box_pixels < _MIN_CLASS_PIXELS_IN_BOX or class_idx is None) and box_top_classes:
             top = box_top_classes[0]
             used_class_idx = int(top["class_idx"])
             used_class_name = str(top["class_name"])
@@ -556,7 +569,13 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
 
     out: dict = {"class_name": used_class_name, "distance_m": round(distance_m, 3), "direction": direction}
     if class_substituted:
-        out["note"] = f"'{class_name}' not found in box — measured nearest object instead. Distance is still valid."
+        if requested_class_in_box_pixels is not None and requested_class_in_box_pixels > 0:
+            out["note"] = (
+                f"Only {requested_class_in_box_pixels} pixel(s) of '{class_name}' found in box "
+                f"(threshold {_MIN_CLASS_PIXELS_IN_BOX}) — used dominant class '{used_class_name}' instead."
+            )
+        else:
+            out["note"] = f"'{class_name}' not found in box — used dominant class '{used_class_name}' instead."
 
     session.measurements.append({
         "class_name": used_class_name,

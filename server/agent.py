@@ -58,7 +58,6 @@ Tool-use requirements:
 
 Direction and reporting rules:
 - measure_object returns direction text. Use that direction phrase verbatim.
-- If intrinsics are assumed, mention direction is approximate when useful.
 - If multiple relevant instances are visible, explicitly say there are multiple instances.
 
 Response format requirements by intent:
@@ -203,12 +202,11 @@ def _build_question_content(question: str | bytes) -> list[dict]:
     return [{"type": "text", "text": question}]
 
 
-def build_messages(image: Image.Image, question: str | bytes) -> list[dict]:
-    image_url = _image_to_data_url(image)
-    content: list[dict] = [
-        {"type": "image_url", "image_url": {"url": image_url}},
-        *_build_question_content(question),
-    ]
+def build_messages(image: Image.Image | None, question: str | bytes) -> list[dict]:
+    content: list[dict] = []
+    if image is not None:
+        content.append({"type": "image_url", "image_url": {"url": _image_to_data_url(image)}})
+    content.extend(_build_question_content(question))
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": content},
@@ -293,8 +291,10 @@ def run_agent_loop(
     t_total = time.monotonic()
     client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
 
+    has_image = session.image is not None
+
     if history is not None:
-        if send_image:
+        if send_image and has_image:
             image_url = _image_to_data_url(session.image)
             user_content = [{"type": "image_url", "image_url": {"url": image_url}}, *_build_question_content(session.question)]
         else:
@@ -304,12 +304,12 @@ def run_agent_loop(
         messages = build_messages(session.image, session.question)
 
     for round_idx in range(MAX_TOOL_ROUNDS):
-        tools = _active_tools()
+        tools = _active_tools() if has_image else []
         request_payload = {
             "model": MODEL_ID,
             "messages": messages,
             "tools": tools,
-            "tool_choice": "auto",
+            "tool_choice": "auto" if has_image else "none",
             "parallel_tool_calls": True,
             "max_tokens": MAX_TOKENS,
             "extra_body": {

@@ -1,0 +1,949 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>SpatialSense · Gemma</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Outfit:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ══ Design: Refined Obsidian ══════════════════════════
+       Dark luxury instrument. Gemma gradient is the only
+       source of light in the interface.
+    ═══════════════════════════════════════════════════════ */
+    :root {
+      --bg:        #080b14;
+      --s1:        #0f1220;
+      --s2:        #161b2e;
+      --s3:        #1e2440;
+      --border:    rgba(255,255,255,0.07);
+      --border-hi: rgba(255,255,255,0.13);
+
+      --ink:       #dde3f7;
+      --ink-soft:  #7a85a8;
+      --ink-muted: #3d4560;
+
+      /* Gemma signature */
+      --g-blue:   #5b9cf6;
+      --g-violet: #a87fff;
+      --gemma-grad: linear-gradient(135deg, var(--g-blue) 0%, var(--g-violet) 100%);
+
+      /* Button gradients */
+      --photo-grad:  linear-gradient(140deg, #00c9a7 0%, #0ea5e9 100%);
+      --ask-grad:    linear-gradient(140deg, #5b9cf6 0%, #a87fff 100%);
+      --photo2-grad: linear-gradient(140deg, #0a7060 0%, #0c6487 100%);
+      --ask-muted:   linear-gradient(140deg, #1e2d6b 0%, #2e1e60 100%);
+
+      --red:        #ff6b6b;
+      --r-lg: 24px;
+      --r-md: 16px;
+      --r-sm: 12px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Outfit", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* Film grain overlay */
+    body::after {
+      content: "";
+      position: fixed; inset: 0;
+      z-index: 9998;
+      pointer-events: none;
+      opacity: 0.045;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.78' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-size: 160px;
+    }
+
+    /* Ambient top-left glow */
+    body::before {
+      content: "";
+      position: fixed;
+      top: -25%; left: -15%;
+      width: 75%; height: 65%;
+      background: radial-gradient(ellipse, rgba(91,156,246,0.07) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── SHELL ─────────────────────────────────────────────── */
+    #main {
+      position: relative; z-index: 1;
+      display: flex; flex-direction: column;
+      height: 100dvh;
+      max-width: 480px;
+      margin: 0 auto;
+      animation: shell-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes shell-in {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ── HEADER ────────────────────────────────────────────── */
+    .header {
+      flex-shrink: 0;
+      padding: 1.1rem 1.25rem 1rem;
+      display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, transparent 100%);
+      position: relative;
+    }
+    /* Gemma gradient hairline under header */
+    .header::after {
+      content: "";
+      position: absolute; bottom: -1px; left: 1.25rem; right: 1.25rem;
+      height: 1px;
+      background: var(--gemma-grad);
+      opacity: 0.5;
+      border-radius: 99px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 0.7rem; }
+
+    .gemma-crystal {
+      width: 38px; height: 38px;
+      flex-shrink: 0;
+      animation: crystal-breathe 5s ease-in-out infinite;
+    }
+    @keyframes crystal-breathe {
+      0%, 100% { filter: drop-shadow(0 0 6px rgba(91,156,246,0.45)); }
+      50%       { filter: drop-shadow(0 0 18px rgba(168,127,255,0.65)); }
+    }
+
+    .brand-text { display: flex; flex-direction: column; gap: 0.08rem; }
+
+    .brand-name {
+      font-family: "Playfair Display", serif;
+      font-size: 1.22rem;
+      font-weight: 700;
+      color: var(--ink);
+      letter-spacing: 0.01em;
+      line-height: 1.1;
+    }
+
+    .brand-powered {
+      display: flex; align-items: center; gap: 0.32rem;
+      font-family: "DM Mono", monospace;
+      font-size: 0.6rem;
+      font-weight: 400;
+      color: var(--ink-muted);
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+    .brand-gem-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--gemma-grad);
+      flex-shrink: 0;
+    }
+
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      background: var(--s2);
+      border: 1px solid var(--border-hi);
+      border-radius: 999px;
+      padding: 0.32rem 0.8rem;
+      font-family: "DM Mono", monospace;
+      font-size: 0.7rem; font-weight: 500;
+      color: var(--ink-soft);
+      letter-spacing: 0.03em;
+    }
+
+    .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--ink-muted);
+      flex-shrink: 0;
+      transition: background 0.4s;
+    }
+    .dot.live {
+      background: #00e5a0;
+      animation: dot-glow 1.6s ease-in-out infinite;
+    }
+    @keyframes dot-glow {
+      0%, 100% { box-shadow: 0 0 5px rgba(0,229,160,0.5); }
+      50%       { box-shadow: 0 0 14px rgba(0,229,160,0.9); }
+    }
+
+    /* ── ACTION AREA ───────────────────────────────────────── */
+    .action-area {
+      flex: 1; min-height: 0;
+      padding: 1.25rem 1.25rem 0.75rem;
+      display: flex; flex-direction: column;
+    }
+
+    .btn-stack { display: flex; flex-direction: column; gap: 0.9rem; flex: 1; }
+
+    /* ── ACTION BUTTONS ────────────────────────────────────── */
+    .btn-action {
+      border: none;
+      border-radius: var(--r-lg);
+      color: #fff;
+      font-family: "Outfit", sans-serif;
+      font-weight: 700;
+      cursor: pointer;
+      width: 100%;
+      display: flex; align-items: center; gap: 1.1rem;
+      padding: 0 1.4rem;
+      position: relative; overflow: hidden;
+      transition: transform 130ms cubic-bezier(0.34, 1.56, 0.64, 1),
+                  box-shadow 130ms ease;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+    }
+
+    /* Top-edge highlight — simulates physical button with light above */
+    .btn-action::before {
+      content: "";
+      position: absolute; top: 0; left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg, transparent 5%, rgba(255,255,255,0.32) 50%, transparent 95%);
+    }
+
+    /* Press overlay */
+    .btn-action::after {
+      content: "";
+      position: absolute; inset: 0;
+      background: transparent;
+      transition: background 100ms;
+    }
+    .btn-action:active::after  { background: rgba(0,0,0,0.12); }
+    .btn-action:active { transform: scale(0.974) translateY(2px) !important; }
+
+    .btn-action.large {
+      flex: 3;
+      min-height: 120px;
+      box-shadow:
+        0 1px 0 rgba(255,255,255,0.05) inset,
+        0 12px 40px rgba(0,0,0,0.55),
+        0 4px 16px rgba(0,0,0,0.3);
+      animation: btn-breathe 4.5s ease-in-out infinite;
+    }
+    .btn-action.small {
+      flex: 1;
+      min-height: 80px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+    }
+
+    @keyframes btn-breathe {
+      0%, 100% {
+        box-shadow:
+          0 1px 0 rgba(255,255,255,0.05) inset,
+          0 12px 40px rgba(0,0,0,0.55),
+          0 4px 16px rgba(0,0,0,0.3);
+      }
+      50% {
+        box-shadow:
+          0 1px 0 rgba(255,255,255,0.05) inset,
+          0 16px 50px rgba(0,0,0,0.55),
+          0 8px 30px rgba(91,156,246,0.2);
+      }
+    }
+
+    .btn-photo     { background: var(--photo-grad); }
+    .btn-ask       { background: var(--ask-grad); }
+    .btn-photo2    { background: var(--photo2-grad); }
+    .btn-ask-muted { background: var(--ask-muted); }
+
+    .btn-icon-box {
+      width: 50px; height: 50px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.18);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .btn-action.small .btn-icon-box {
+      width: 38px; height: 38px;
+      border-radius: 10px;
+    }
+    .btn-icon-box svg { display: block; }
+
+    .btn-copy { display: flex; flex-direction: column; gap: 0.1rem; text-align: left; }
+    .btn-label { font-size: 1.18rem; letter-spacing: 0.008em; line-height: 1.15; }
+    .btn-action.small .btn-label { font-size: 0.98rem; }
+    .btn-hint { font-size: 0.75rem; font-weight: 400; opacity: 0.72; }
+
+    /* ── ANALYZING STATE ───────────────────────────────────── */
+    .analyzing-card {
+      flex: 1;
+      background: var(--s2);
+      border: 1px solid var(--border-hi);
+      border-radius: var(--r-lg);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 1.1rem;
+      padding: 2rem 1.5rem;
+    }
+
+    .analyzing-spinner {
+      width: 58px; height: 58px;
+      border-radius: 50%;
+      border: 3px solid var(--s3);
+      border-top-color: var(--g-blue);
+      border-right-color: var(--g-violet);
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .analyzing-label {
+      font-size: 1.25rem; font-weight: 700;
+      color: var(--ink); text-align: center;
+    }
+    .analyzing-sub {
+      font-size: 0.82rem; color: var(--ink-soft); text-align: center;
+    }
+
+    .analyzing-dots { display: flex; gap: 6px; align-items: center; }
+    .analyzing-dots span {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--g-blue);
+      animation: dot-pulse 1.2s ease-in-out infinite;
+    }
+    .analyzing-dots span:nth-child(2) { animation-delay: 0.2s; background: linear-gradient(135deg, var(--g-blue), var(--g-violet)); }
+    .analyzing-dots span:nth-child(3) { animation-delay: 0.4s; background: var(--g-violet); }
+    @keyframes dot-pulse {
+      0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
+      40%           { transform: scale(1.1); opacity: 1; }
+    }
+
+    /* ── BOTTOM STRIP ──────────────────────────────────────── */
+    .bottom-strip {
+      flex-shrink: 0;
+      padding: 0.5rem 1.25rem 1.5rem;
+      display: flex; flex-direction: column; gap: 0.6rem;
+    }
+
+    .collapsible {
+      background: var(--s1);
+      border: 1px solid var(--border-hi);
+      border-radius: var(--r-md);
+      overflow: hidden;
+    }
+    .collapsible-toggle {
+      width: 100%; background: none; border: none;
+      font-family: "Outfit", sans-serif;
+      font-size: 0.82rem; font-weight: 600;
+      color: var(--g-blue);
+      padding: 0.6rem 0.9rem;
+      text-align: left; cursor: pointer;
+      display: flex; justify-content: space-between; align-items: center;
+      letter-spacing: 0.02em;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .collapsible-body {
+      display: none;
+      padding: 0.55rem 0.9rem 0.75rem;
+      font-size: 0.88rem; line-height: 1.55;
+      color: var(--ink-soft);
+      border-top: 1px solid var(--border);
+    }
+    .collapsible-body.open { display: block; }
+    .chevron { transition: transform 200ms ease; display: inline-block; }
+    .chevron.open { transform: rotate(180deg); }
+
+    .bottom-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.6rem;
+    }
+
+    .btn-reset, .btn-depth {
+      border: 1px solid var(--border-hi);
+      border-radius: var(--r-sm);
+      background: var(--s1);
+      font-family: "Outfit", sans-serif;
+      font-weight: 600;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 120ms;
+    }
+    .btn-reset:active, .btn-depth:active { background: var(--s2); }
+    .btn-reset {
+      color: var(--ink-soft); font-size: 0.85rem; padding: 0.7rem 1rem;
+    }
+    .btn-depth {
+      color: var(--g-blue); font-size: 0.8rem; padding: 0.7rem 0.85rem; white-space: nowrap;
+    }
+
+    /* ── DEPTH MAP ─────────────────────────────────────────── */
+    #depth-section { display: none; }
+    #depth-section.open { display: block; }
+
+    .depth-wrap { padding: 0 1.25rem 1.25rem; }
+
+    .depth-map {
+      width: 100%; aspect-ratio: 4/3;
+      border-radius: var(--r-md);
+      border: 1px solid var(--border-hi);
+      background: linear-gradient(180deg, #0a1520 0%, #1a4a5a 25%, #2d8070 55%, #c8b840 78%, #c85030 100%);
+      position: relative;
+    }
+    .depth-map::after {
+      content: "DEPTH MAP";
+      position: absolute; left: 0.8rem; bottom: 0.7rem;
+      font-family: "DM Mono", monospace;
+      font-size: 0.68rem; font-weight: 500; letter-spacing: 0.12em;
+      color: rgba(255,255,255,0.65);
+      text-shadow: 0 1px 4px rgba(0,0,0,0.7);
+    }
+
+    /* ── AUDIO PANEL ───────────────────────────────────────── */
+    #audio-panel {
+      position: fixed; inset: 0; z-index: 100;
+      display: flex; flex-direction: column; justify-content: flex-end;
+      pointer-events: none;
+    }
+    #audio-panel.open { pointer-events: auto; }
+
+    .panel-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(8,11,20,0.8);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      opacity: 0; transition: opacity 280ms ease;
+    }
+    #audio-panel.open .panel-backdrop { opacity: 1; }
+
+    .panel-sheet {
+      position: relative;
+      background: var(--s2);
+      border-radius: 28px 28px 0 0;
+      border-top: 1px solid var(--border-hi);
+      padding: 0.8rem 1.3rem 2.8rem;
+      display: flex; flex-direction: column; gap: 1rem;
+      transform: translateY(100%);
+      transition: transform 380ms cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    #audio-panel.open .panel-sheet { transform: translateY(0); }
+
+    /* Gemma gradient lip on panel */
+    .panel-sheet::before {
+      content: "";
+      position: absolute; top: -1px; left: 2rem; right: 2rem;
+      height: 1px;
+      background: var(--gemma-grad);
+      border-radius: 99px;
+      opacity: 0.7;
+    }
+
+    .panel-handle {
+      width: 36px; height: 3px;
+      background: var(--border-hi);
+      border-radius: 99px;
+      margin: 0 auto 0.15rem;
+    }
+
+    .panel-top {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .panel-title {
+      font-family: "Playfair Display", serif;
+      font-size: 1.1rem; font-weight: 600; font-style: italic;
+      color: var(--ink);
+    }
+    .gemma-tag {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      background: linear-gradient(135deg, rgba(91,156,246,0.1), rgba(168,127,255,0.1));
+      border: 1px solid rgba(91,156,246,0.22);
+      border-radius: 999px;
+      padding: 0.22rem 0.65rem;
+      font-family: "DM Mono", monospace;
+      font-size: 0.64rem; letter-spacing: 0.07em;
+      color: var(--g-blue);
+    }
+
+    /* Waveform */
+    .waveform {
+      display: flex; align-items: center; gap: 3px; height: 36px;
+    }
+    .waveform span {
+      flex: 1; max-width: 5px;
+      border-radius: 99px;
+      animation: wave 1.1s ease-in-out infinite;
+    }
+    .waveform span:nth-child(odd)  { background: var(--g-blue);   }
+    .waveform span:nth-child(even) { background: var(--g-violet); }
+    .waveform span:nth-child(1)  { height: 30%;  animation-delay: 0s;     }
+    .waveform span:nth-child(2)  { height: 75%;  animation-delay: 0.08s;  }
+    .waveform span:nth-child(3)  { height: 55%;  animation-delay: 0.17s;  }
+    .waveform span:nth-child(4)  { height: 100%; animation-delay: 0.26s;  }
+    .waveform span:nth-child(5)  { height: 45%;  animation-delay: 0.12s;  }
+    .waveform span:nth-child(6)  { height: 80%;  animation-delay: 0.21s;  }
+    .waveform span:nth-child(7)  { height: 38%;  animation-delay: 0.05s;  }
+    .waveform span:nth-child(8)  { height: 65%;  animation-delay: 0.30s;  }
+    .waveform span:nth-child(9)  { height: 50%;  animation-delay: 0.15s;  }
+    .waveform span:nth-child(10) { height: 88%;  animation-delay: 0.24s;  }
+    @keyframes wave {
+      0%, 100% { transform: scaleY(1);    }
+      50%       { transform: scaleY(0.18); }
+    }
+
+    .panel-response {
+      font-size: 0.93rem; line-height: 1.6;
+      color: var(--ink-soft);
+      max-height: 8rem; overflow-y: auto;
+      background: var(--s1);
+      border-radius: var(--r-sm);
+      padding: 0.8rem 1rem;
+      border: 1px solid var(--border);
+    }
+
+    .panel-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+
+    .btn-panel {
+      border: none; border-radius: var(--r-sm);
+      font-family: "Outfit", sans-serif;
+      font-weight: 700; font-size: 0.95rem;
+      cursor: pointer; padding: 0.9rem;
+      display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+      -webkit-tap-highlight-color: transparent;
+      transition: transform 100ms ease, filter 100ms ease;
+    }
+    .btn-panel:active { transform: scale(0.97); }
+
+    .btn-stop    { background: rgba(255,107,107,0.11); border: 1px solid rgba(255,107,107,0.18); color: var(--red); }
+    .btn-restart { background: rgba(91,156,246,0.09);  border: 1px solid rgba(91,156,246,0.18);  color: var(--g-blue); }
+  </style>
+</head>
+<body>
+
+<div id="main">
+
+  <header class="header">
+    <div class="brand">
+      <svg class="gemma-crystal" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%"   stop-color="#5b9cf6"/>
+            <stop offset="100%" stop-color="#a87fff"/>
+          </linearGradient>
+        </defs>
+        <path d="M20 3 L34 11 L34 29 L20 37 L6 29 L6 11 Z"
+              stroke="url(#cg)" stroke-width="1.5" fill="rgba(91,156,246,0.06)"/>
+        <path d="M20 9 L30 15 L30 25 L20 31 L10 25 L10 15 Z"
+              stroke="url(#cg)" stroke-width="1" fill="rgba(168,127,255,0.08)"/>
+        <path d="M20 14 L26 17.5 L26 22.5 L20 26 L14 22.5 L14 17.5 Z"
+              fill="url(#cg)" opacity="0.9"/>
+      </svg>
+      <div class="brand-text">
+        <span class="brand-name">SpatialSense</span>
+        <div class="brand-powered">
+          <span class="brand-gem-dot"></span>
+          Powered by Google Gemma
+        </div>
+      </div>
+    </div>
+    <div class="status-pill">
+      <span class="dot" id="dot"></span>
+      <span id="status-text">ready</span>
+    </div>
+  </header>
+
+  <div class="action-area">
+
+    <!-- State 0: no photo -->
+    <div class="btn-stack" id="state-no-photo">
+      <button class="btn-action btn-photo large" id="btn-photo-first" aria-label="Take photo with back camera">
+        <div class="btn-icon-box">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </div>
+        <div class="btn-copy">
+          <span class="btn-label">Take Photo</span>
+          <span class="btn-hint">Back camera · start here</span>
+        </div>
+      </button>
+      <button class="btn-action btn-ask-muted small" id="btn-ask-no-photo" aria-label="Ask a question without a photo">
+        <div class="btn-icon-box">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </div>
+        <div class="btn-copy">
+          <span class="btn-label">Ask Without Photo</span>
+        </div>
+      </button>
+    </div>
+
+    <!-- State 2: Analyzing (shown while server is processing) -->
+    <div class="btn-stack" id="state-analyzing" style="display:none" aria-live="polite" aria-label="Analyzing">
+      <div class="analyzing-card">
+        <div class="analyzing-spinner"></div>
+        <div class="analyzing-label">Analyzing your scene…</div>
+        <div class="analyzing-sub">Gemma is processing your image</div>
+        <div class="analyzing-dots"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+
+    <!-- State 1+: has photo -->
+    <div class="btn-stack" id="state-has-photo" style="display:none">
+      <button class="btn-action btn-ask large" id="btn-ask" aria-label="Record your question">
+        <div class="btn-icon-box">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </div>
+        <div class="btn-copy">
+          <span class="btn-label">Ask Question</span>
+          <span class="btn-hint">Tap &amp; speak</span>
+        </div>
+      </button>
+      <button class="btn-action btn-photo2 small" id="btn-photo-retake" aria-label="Retake photo">
+        <div class="btn-icon-box">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </div>
+        <div class="btn-copy">
+          <span class="btn-label">Retake Photo</span>
+        </div>
+      </button>
+    </div>
+
+  </div>
+
+  <div class="bottom-strip">
+    <div class="collapsible" id="response-collapsible" style="display:none">
+      <button class="collapsible-toggle" id="collapsible-btn" aria-expanded="false">
+        <span>Last response</span>
+        <span class="chevron" id="chevron">▾</span>
+      </button>
+      <div class="collapsible-body" id="collapsible-body"></div>
+    </div>
+    <div class="bottom-row">
+      <button class="btn-reset" id="btn-reset">New Scene / Clear</button>
+      <button class="btn-depth" id="btn-depth">Depth ↓</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- Hidden camera input + TTS audio element -->
+<input type="file" id="camera-input" accept="image/*" capture="environment" style="display:none">
+<audio id="tts-audio" style="display:none"></audio>
+
+<div id="depth-section">
+  <div class="depth-wrap">
+    <div class="depth-map" role="img" aria-label="Depth map">
+      <img id="depth-img" alt="Depth map" style="width:100%;height:100%;object-fit:cover;border-radius:inherit;display:none">
+    </div>
+  </div>
+</div>
+
+<div id="audio-panel" role="dialog" aria-modal="true" aria-label="Playing response">
+  <div class="panel-backdrop" id="panel-backdrop"></div>
+  <div class="panel-sheet">
+    <div class="panel-handle"></div>
+    <div class="panel-top">
+      <div class="panel-title">Playing response…</div>
+      <div class="gemma-tag">◆ Gemma</div>
+    </div>
+    <div class="waveform" aria-hidden="true">
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="panel-response" id="panel-response-text"></div>
+    <div class="panel-controls">
+      <button class="btn-panel btn-stop"    id="btn-stop">⏹ Stop</button>
+      <button class="btn-panel btn-restart" id="btn-restart">↩ Restart</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── DOM refs ────────────────────────────────────────────────
+  const dot              = document.getElementById("dot");
+  const statusText       = document.getElementById("status-text");
+  const stateNoPhoto     = document.getElementById("state-no-photo");
+  const stateHasPhoto    = document.getElementById("state-has-photo");
+  const stateAnalyzing   = document.getElementById("state-analyzing");
+  const audioPanel       = document.getElementById("audio-panel");
+  const panelRespTxt     = document.getElementById("panel-response-text");
+  const responseCollapse = document.getElementById("response-collapsible");
+  const collapsibleBtn   = document.getElementById("collapsible-btn");
+  const collapsibleBody  = document.getElementById("collapsible-body");
+  const chevron          = document.getElementById("chevron");
+  const depthSection     = document.getElementById("depth-section");
+  const btnDepth         = document.getElementById("btn-depth");
+  const cameraInput      = document.getElementById("camera-input");
+  const ttsAudio         = document.getElementById("tts-audio");
+  const depthImg         = document.getElementById("depth-img");
+
+  // ── State ────────────────────────────────────────────────────
+  let depthOpen        = false;
+  let collapseOpen     = false;
+  let hasPhoto         = false;
+  let isRecording      = false;
+  let mediaRecorder    = null;
+  let audioChunks      = [];
+  let queryWithImage   = true;
+  let currentImageFile = null;
+  let _prevState       = null;   // which state div was showing before analyzing
+  let sessionId = localStorage.getItem("ss_sid") || crypto.randomUUID();
+  localStorage.setItem("ss_sid", sessionId);
+
+  // ── iOS audio unlock ─────────────────────────────────────────
+  // Play a silent sound on first user touch so subsequent .play() calls work.
+  let _audioUnlocked = false;
+  function _unlockAudio() {
+    if (_audioUnlocked) return;
+    _audioUnlocked = true;
+    const silent = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+    ttsAudio.src = silent;
+    ttsAudio.play().then(() => { ttsAudio.pause(); ttsAudio.src = ""; }).catch(() => {});
+  }
+  document.addEventListener("touchstart", _unlockAudio, { once: true });
+  document.addEventListener("click",      _unlockAudio, { once: true });
+
+  // ── Helpers ──────────────────────────────────────────────────
+  function setStatus(label, live = false) {
+    statusText.textContent = label;
+    dot.classList.toggle("live", live);
+  }
+
+  function transitionToHasPhoto() {
+    if (hasPhoto) return;
+    hasPhoto = true;
+    stateNoPhoto.style.display = "none";
+    stateHasPhoto.style.display = "flex";
+  }
+
+  function showAnalyzing() {
+    _prevState = hasPhoto ? stateHasPhoto : stateNoPhoto;
+    _prevState.style.display = "none";
+    stateAnalyzing.style.display = "flex";
+    setStatus("analyzing…", true);
+  }
+
+  function hideAnalyzing() {
+    stateAnalyzing.style.display = "none";
+    if (_prevState) { _prevState.style.display = "flex"; _prevState = null; }
+    setStatus("ready");
+  }
+
+  function showLastResponse(text) {
+    collapsibleBody.textContent = text;
+    responseCollapse.style.display = "block";
+  }
+
+  function b64ToBlob(b64, mime) {
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
+
+  function resetAskButtons() {
+    const a = document.getElementById("btn-ask");
+    const b = document.getElementById("btn-ask-no-photo");
+    if (a) { a.querySelector(".btn-label").textContent = "Ask Question"; a.classList.remove("recording"); }
+    if (b) { b.querySelector(".btn-label").textContent = "Ask Without Photo"; b.classList.remove("recording"); }
+  }
+
+  // ── Camera ───────────────────────────────────────────────────
+  function triggerCamera() {
+    cameraInput.value = "";
+    cameraInput.click();
+  }
+
+  cameraInput.addEventListener("change", () => {
+    const file = cameraInput.files[0];
+    if (!file) return;
+    currentImageFile = file;
+    // New photo resets the conversation
+    sessionId = crypto.randomUUID();
+    localStorage.setItem("ss_sid", sessionId);
+    setStatus("photo taken", true);
+    transitionToHasPhoto();
+  });
+
+  // ── Recording ────────────────────────────────────────────────
+  async function startRecording(withImage) {
+    queryWithImage = withImage;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunks = [];
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+      mediaRecorder.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        submitQuery(queryWithImage);
+      };
+      mediaRecorder.start();
+      isRecording = true;
+    } catch (err) {
+      setStatus("mic denied", false);
+      resetAskButtons();
+      console.error(err);
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && isRecording) {
+      mediaRecorder.stop();
+      isRecording = false;
+    }
+  }
+
+  function toggleRecording(btn, withImage) {
+    if (!isRecording) {
+      btn.querySelector(".btn-label").textContent = "Stop & Send";
+      btn.classList.add("recording");
+      setStatus("recording…", true);
+      startRecording(withImage);
+    } else {
+      stopRecording();
+      resetAskButtons();
+    }
+  }
+
+  // ── Submit ───────────────────────────────────────────────────
+  async function submitQuery(withImage) {
+    showAnalyzing();
+
+    const fd = new FormData();
+    fd.append("session_id", sessionId);
+
+    if (withImage && currentImageFile) {
+      fd.append("image", currentImageFile, currentImageFile.name);
+    }
+
+    if (audioChunks.length > 0) {
+      const mime = mediaRecorder?.mimeType || "audio/webm";
+      const ext  = mime.includes("mp4") ? "mp4" : "webm";
+      fd.append("audio", new Blob(audioChunks, { type: mime }), `q.${ext}`);
+    }
+
+    audioChunks = [];
+
+    try {
+      const resp = await fetch("/api/query", { method: "POST", body: fd });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+
+      panelRespTxt.textContent = data.response || "(No response)";
+      showLastResponse(data.response || "");
+
+      if (data.audio_b64) {
+        const blob = b64ToBlob(data.audio_b64, "audio/mpeg");
+        const url  = URL.createObjectURL(blob);
+        ttsAudio.onended = () => { setStatus("ready"); URL.revokeObjectURL(url); };
+        ttsAudio.src = url;
+        ttsAudio.load();
+      }
+
+      if (data.depth_b64) {
+        depthImg.src = `data:image/jpeg;base64,${data.depth_b64}`;
+        depthImg.style.display = "block";
+      }
+
+      hideAnalyzing();
+      openAudioPanel();
+    } catch (err) {
+      console.error("Query failed:", err);
+      panelRespTxt.textContent = "Could not reach the server. Please check your connection.";
+      hideAnalyzing();
+      setStatus("error", false);
+    }
+  }
+
+  // ── Button wiring ────────────────────────────────────────────
+  document.getElementById("btn-photo-first").addEventListener("click", triggerCamera);
+  document.getElementById("btn-photo-retake").addEventListener("click", triggerCamera);
+
+  document.getElementById("btn-ask-no-photo").addEventListener("click", function () {
+    toggleRecording(this, false);
+  });
+  document.getElementById("btn-ask").addEventListener("click", function () {
+    toggleRecording(this, true);
+  });
+
+  document.getElementById("btn-reset").addEventListener("click", async () => {
+    try { await fetch(`/api/session/${sessionId}`, { method: "DELETE" }); } catch {}
+    sessionId = crypto.randomUUID();
+    localStorage.setItem("ss_sid", sessionId);
+    currentImageFile = null;
+    hasPhoto = false;
+    stateHasPhoto.style.display = "none";
+    stateNoPhoto.style.display = "flex";
+    resetAskButtons();
+    setStatus("ready");
+    responseCollapse.style.display = "none";
+    collapseOpen = false;
+    collapsibleBody.classList.remove("open");
+    chevron.classList.remove("open");
+    ttsAudio.pause();
+    ttsAudio.src = "";
+  });
+
+  // ── Depth toggle ─────────────────────────────────────────────
+  btnDepth.addEventListener("click", () => {
+    depthOpen = !depthOpen;
+    depthSection.classList.toggle("open", depthOpen);
+    btnDepth.textContent = depthOpen ? "Depth ↑" : "Depth ↓";
+    if (depthOpen) depthSection.scrollIntoView({ behavior: "smooth" });
+  });
+
+  // ── Response collapsible ─────────────────────────────────────
+  collapsibleBtn.addEventListener("click", () => {
+    collapseOpen = !collapseOpen;
+    collapsibleBody.classList.toggle("open", collapseOpen);
+    chevron.classList.toggle("open", collapseOpen);
+    collapsibleBtn.setAttribute("aria-expanded", collapseOpen);
+  });
+
+  // ── Audio panel ──────────────────────────────────────────────
+  function openAudioPanel() {
+    audioPanel.classList.add("open");
+    setStatus("playing…", true);
+    // Try immediate play; if audio hasn't loaded yet fall back to canplay event.
+    ttsAudio.play().catch(() => {
+      ttsAudio.addEventListener("canplay", () => {
+        ttsAudio.play().catch(e => console.warn("Autoplay blocked:", e));
+      }, { once: true });
+    });
+    document.getElementById("btn-stop").focus();
+  }
+
+  function closeAudioPanel() {
+    audioPanel.classList.remove("open");
+    ttsAudio.pause();
+    setStatus("ready");
+  }
+
+  document.getElementById("btn-stop").addEventListener("click", closeAudioPanel);
+  document.getElementById("btn-restart").addEventListener("click", () => {
+    ttsAudio.currentTime = 0;
+    ttsAudio.play();
+    setStatus("playing…", true);
+  });
+  document.getElementById("panel-backdrop").addEventListener("click", closeAudioPanel);
+
+  ttsAudio.addEventListener("ended", () => setStatus("ready"));
+</script>
+
+</body>
+</html>

@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SpatialSense Blind-First UI Mock</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800&family=Sora:wght@500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg-0: #f6f4ec;
+      --bg-1: #e4efe2;
+      --bg-2: #f4e7cf;
+      --ink: #17212b;
+      --ink-soft: #344151;
+      --accent-photo: #0b8f6d;
+      --accent-photo-press: #0a755b;
+      --accent-ask: #165d9c;
+      --accent-ask-press: #124975;
+      --danger: #b23a48;
+      --ok: #167f39;
+      --card: rgba(255, 255, 255, 0.78);
+      --border: rgba(23, 33, 43, 0.12);
+      --shadow: 0 20px 40px rgba(23, 33, 43, 0.14);
+      --radius: 26px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Outfit", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(90vmax 90vmax at -15% -10%, #ffffff 0%, transparent 65%),
+        radial-gradient(80vmax 80vmax at 110% 0%, #fff7e8 0%, transparent 60%),
+        linear-gradient(145deg, var(--bg-0), var(--bg-1) 45%, var(--bg-2));
+      display: grid;
+      place-items: center;
+      padding: 1rem;
+    }
+
+    .shell {
+      width: min(1050px, 100%);
+      border: 1px solid var(--border);
+      border-radius: 34px;
+      background: var(--card);
+      backdrop-filter: blur(8px);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .top {
+      padding: 1.2rem 1.2rem 0.2rem;
+      display: flex;
+      gap: 0.8rem;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-family: "Sora", sans-serif;
+      font-size: clamp(1.1rem, 2.4vw, 1.6rem);
+      letter-spacing: 0.01em;
+    }
+
+    .brand p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 0.98rem;
+    }
+
+    .state-pill {
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.75);
+      border-radius: 999px;
+      padding: 0.55rem 0.95rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      color: var(--ink-soft);
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+
+    .dot {
+      width: 0.64rem;
+      height: 0.64rem;
+      border-radius: 999px;
+      background: #8e9aa6;
+    }
+
+    .dot.live {
+      background: var(--ok);
+      box-shadow: 0 0 0 0 rgba(22, 127, 57, 0.45);
+      animation: pulse 1.5s infinite;
+    }
+
+    .grid {
+      padding: 1rem 1.2rem 1.2rem;
+      display: grid;
+      grid-template-columns: 1.2fr 0.9fr;
+      gap: 1rem;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: rgba(255, 255, 255, 0.84);
+      padding: 1rem;
+    }
+
+    .hero {
+      display: grid;
+      gap: 0.9rem;
+    }
+
+    .hero h2 {
+      margin: 0;
+      font-size: clamp(1.4rem, 2.8vw, 2.1rem);
+      line-height: 1.15;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: 1.03rem;
+      line-height: 1.4;
+    }
+
+    .actions {
+      display: grid;
+      gap: 0.8rem;
+    }
+
+    button {
+      border: none;
+      border-radius: 22px;
+      color: #ffffff;
+      font-family: "Sora", sans-serif;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: transform 120ms ease, filter 120ms ease;
+      text-align: left;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      padding: 1rem 1rem;
+    }
+
+    button:focus-visible {
+      outline: 4px solid rgba(22, 93, 156, 0.35);
+      outline-offset: 3px;
+    }
+
+    button:hover { filter: brightness(1.04); }
+    button:active { transform: translateY(2px) scale(0.995); }
+
+    .primary {
+      min-height: 108px;
+      font-size: clamp(1.2rem, 2vw, 1.55rem);
+      background: linear-gradient(135deg, var(--accent-photo), #22b387);
+      box-shadow: inset 0 -5px 0 rgba(0, 0, 0, 0.12);
+    }
+
+    .secondary {
+      min-height: 94px;
+      font-size: clamp(1.05rem, 1.7vw, 1.32rem);
+      background: linear-gradient(135deg, var(--accent-ask), #2382cf);
+      box-shadow: inset 0 -5px 0 rgba(0, 0, 0, 0.13);
+    }
+
+    .tertiary {
+      min-height: 78px;
+      font-size: 1.05rem;
+      color: var(--ink);
+      border: 1px dashed rgba(23, 33, 43, 0.26);
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .danger {
+      min-height: 66px;
+      font-size: 1rem;
+      background: linear-gradient(135deg, var(--danger), #cc5a67);
+      box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.15);
+    }
+
+    .btn-title { line-height: 1.15; }
+    .btn-sub {
+      font-family: "Outfit", sans-serif;
+      font-size: 0.98rem;
+      font-weight: 500;
+      opacity: 0.95;
+    }
+
+    .stack {
+      display: grid;
+      gap: 0.75rem;
+    }
+
+    .panel-title {
+      margin: 0 0 0.4rem;
+      font-family: "Sora", sans-serif;
+      font-size: 1rem;
+      letter-spacing: 0.01em;
+    }
+
+    .signal {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 0.74rem 0.8rem;
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .signal strong {
+      display: block;
+      margin-bottom: 0.25rem;
+      font-size: 0.9rem;
+      color: var(--ink-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .depth {
+      aspect-ratio: 4 / 3;
+      border-radius: 18px;
+      border: 1px solid var(--border);
+      background:
+        radial-gradient(130% 130% at 20% 10%, #ffffff 0%, transparent 60%),
+        linear-gradient(180deg, #1d2f44 0%, #2f8ca1 30%, #76cbaf 55%, #f7e06f 78%, #f28b4b 100%);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .depth::after {
+      content: "Depth map preview";
+      position: absolute;
+      left: 0.7rem;
+      bottom: 0.6rem;
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.95);
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.32);
+    }
+
+    .hint {
+      margin: 0.3rem 0 0;
+      color: var(--ink-soft);
+      font-size: 0.9rem;
+      line-height: 1.35;
+    }
+
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(22, 127, 57, 0.45); }
+      70% { box-shadow: 0 0 0 11px rgba(22, 127, 57, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(22, 127, 57, 0); }
+    }
+
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      .primary { min-height: 98px; }
+      .secondary { min-height: 90px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="top">
+      <div class="brand">
+        <h1>SpatialSense · Blind-First Flow</h1>
+        <p>Rear camera only. Photo capture starts voice recording automatically.</p>
+      </div>
+      <div class="state-pill" id="session-pill">
+        <span class="dot" id="dot"></span>
+        <span id="session-text">Session active: no photo yet</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card hero">
+        <h2>Fast two-action navigation UX</h2>
+        <p>
+          Primary flow: take a photo with the back camera and immediately speak your question.
+          Secondary flow: ask another spoken question about the same photo.
+        </p>
+
+        <div class="actions">
+          <button class="primary" id="capture-btn" aria-label="Take photo and start recording">
+            <span class="btn-title">Take Photo (Back Camera)</span>
+            <span class="btn-sub">Auto-start recording right after capture</span>
+          </button>
+
+          <button class="secondary" id="followup-question-btn" aria-label="Record follow-up question">
+            <span class="btn-title">Ask Follow-Up Question</span>
+            <span class="btn-sub">Re-use current photo and record voice now</span>
+          </button>
+
+          <button class="tertiary" id="followup-photo-btn" aria-label="Take follow-up photo in same conversation">
+            <span class="btn-title">Take Follow-Up Photo (Same Conversation)</span>
+            <span class="btn-sub">Update scene image but keep conversation context</span>
+          </button>
+
+          <button class="danger" id="clear-btn" aria-label="Clear history and start new scene">
+            <span class="btn-title">New Scene / Clear History</span>
+          </button>
+        </div>
+      </article>
+
+      <aside class="stack">
+        <section class="card">
+          <h3 class="panel-title">Live Signals</h3>
+          <div class="signal">
+            <strong>Recording Transcript</strong>
+            <div id="transcript">Waiting for capture...</div>
+          </div>
+          <div class="signal" style="margin-top: 0.65rem;">
+            <strong>TTS Playback</strong>
+            <div id="tts">No response spoken yet.</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <h3 class="panel-title">Depth Map</h3>
+          <div class="depth" role="img" aria-label="Depth map preview"></div>
+          <p class="hint">
+            This panel stays visible as an optional visual aid for sighted helpers.
+          </p>
+        </section>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const dot = document.getElementById("dot");
+    const sessionText = document.getElementById("session-text");
+    const transcript = document.getElementById("transcript");
+    const tts = document.getElementById("tts");
+
+    const captureBtn = document.getElementById("capture-btn");
+    const followQuestionBtn = document.getElementById("followup-question-btn");
+    const followPhotoBtn = document.getElementById("followup-photo-btn");
+    const clearBtn = document.getElementById("clear-btn");
+
+    function setRecordingState(label) {
+      dot.classList.add("live");
+      sessionText.textContent = label;
+      transcript.textContent = "Recording started automatically...";
+      tts.textContent = "Listening for model response...";
+    }
+
+    captureBtn.addEventListener("click", () => {
+      setRecordingState("Photo captured. Recording question now.");
+    });
+
+    followQuestionBtn.addEventListener("click", () => {
+      setRecordingState("Same photo. Recording follow-up question.");
+    });
+
+    followPhotoBtn.addEventListener("click", () => {
+      setRecordingState("Follow-up photo captured. Recording follow-up question.");
+    });
+
+    clearBtn.addEventListener("click", () => {
+      dot.classList.remove("live");
+      sessionText.textContent = "Session reset: waiting for first photo";
+      transcript.textContent = "History cleared.";
+      tts.textContent = "No response spoken yet.";
+    });
+  </script>
+</body>
+</html>

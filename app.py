@@ -69,10 +69,6 @@ def process(
 ) -> tuple[str, tuple[int, np.ndarray] | None, Image.Image | None, list | None, str | None]:
 
     # ── Input validation ─────────────────────────────────────────────────────
-    if image is None:
-        msg = "Please upload an image before submitting."
-        return msg, _tts_to_numpy(msg), None, history, last_image_hash
-
     audio_bytes = _numpy_to_wav_bytes(audio_input)
     question_text = text_question.strip() if text_question else ""
 
@@ -86,24 +82,25 @@ def process(
             return msg, _tts_to_numpy(msg), None, history, last_image_hash
         audio_bytes = None  # Too short — fall through to text question
 
-    # ── Image quality check ──────────────────────────────────────────────────
-    img_array = np.array(image.convert("RGB"))
-    if img_array.mean() < 20:
-        msg = (
-            "The image appears very dark. "
-            "Please take a photo in better lighting for accurate distance measurements."
-        )
-        return msg, _tts_to_numpy(msg), None, history, last_image_hash
+    # ── Image quality check (only when image provided) ───────────────────────
+    if image is not None:
+        img_array = np.array(image.convert("RGB"))
+        if img_array.mean() < 20:
+            msg = (
+                "The image appears very dark. "
+                "Please take a photo in better lighting for accurate distance measurements."
+            )
+            return msg, _tts_to_numpy(msg), None, history, last_image_hash
 
     # ── Determine question payload ────────────────────────────────────────────
     # Prefer audio (native Gemma multimodal); fall back to text if audio absent
     question: str | bytes = audio_bytes if audio_bytes is not None else question_text
 
     # ── Conversation history ──────────────────────────────────────────────────
-    current_hash = _image_hash(image)
+    current_hash = _image_hash(image) if image is not None else last_image_hash
     image_changed = last_image_hash is not None and current_hash != last_image_hash
     is_first_turn = history is None
-    send_image = is_first_turn or image_changed
+    send_image = image is not None and (is_first_turn or image_changed)
 
     # ── Run pipeline ─────────────────────────────────────────────────────────
     try:
@@ -113,11 +110,6 @@ def process(
             history=None if is_first_turn else history,
             send_image=send_image,
         )
-
-        if session.intrinsics.source == "assumed" and "degree" in response_text.lower():
-            response_text += (
-                " (Note: bearing is approximate — no camera focal length data was available.)"
-            )
 
         depth_display = session.depth_colormap
         session.release()
@@ -141,9 +133,24 @@ def process(
     return response_text, _tts_to_numpy(response_text), depth_display, updated_history, current_hash
 
 
+def process_gen(image, audio_input, text_question, history, last_image_hash):
+    """Generator wrapper: show a thinking message immediately, then stream the real result."""
+    yield "Analyzing your scene, please wait...", None, None, history, last_image_hash
+    yield process(image, audio_input, text_question, history, last_image_hash)
+
+
 # ── Gradio UI ─────────────────────────────────────────────────────────────────
 
-with gr.Blocks(title="SpatialSense — Blind Navigation Assistant") as demo:
+_CSS = """
+.big-btn button {
+    min-height: 90px !important;
+    font-size: 1.35rem !important;
+    font-weight: 700 !important;
+    border-radius: 12px !important;
+}
+"""
+
+with gr.Blocks(title="SpatialSense — Blind Navigation Assistant", css=_CSS) as demo:
     history_state = gr.State(None)
     image_hash_state = gr.State(None)
 
@@ -161,22 +168,39 @@ with gr.Blocks(title="SpatialSense — Blind Navigation Assistant") as demo:
                 label="Typed Question (optional)",
                 placeholder="e.g. how far is the chair?",
             )
-            with gr.Row():
-                submit_btn = gr.Button("Submit", variant="primary")
-                new_scene_btn = gr.Button("New Scene", variant="secondary")
         with gr.Column():
             text_output = gr.Textbox(label="Response", lines=4)
-            audio_output = gr.Audio(type="numpy", label="Spoken Response", autoplay=True)
+            audio_output = gr.Audio(type="numpy", label="Spoken Response", autoplay=True, elem_id="ss_audio_out")
             depth_output = gr.Image(type="pil", label="Depth Map (demo display)")
 
+    with gr.Row():
+        submit_btn = gr.Button("Ask about image", variant="primary", size="lg", elem_classes=["big-btn"], scale=1)
+        new_scene_btn = gr.Button("New Scene / Clear", variant="secondary", size="lg", elem_classes=["big-btn"], scale=1)
+
+    _AUTOPLAY_JS = """
+() => {
+    const container = document.getElementById('ss_audio_out');
+    if (!container) return;
+    const tryPlay = () => {
+        const audio = container.querySelector('audio');
+        if (audio) { audio.currentTime = 0; audio.play(); }
+    };
+    let attempts = 0;
+    const iv = setInterval(() => {
+        tryPlay();
+        if (++attempts >= 10) clearInterval(iv);
+    }, 200);
+}
+"""
+
     submit_btn.click(
-        fn=process,
+        fn=process_gen,
         inputs=[image_input, audio_input, text_input, history_state, image_hash_state],
         outputs=[text_output, audio_output, depth_output, history_state, image_hash_state],
-    )
+    ).then(fn=None, js=_AUTOPLAY_JS)
     new_scene_btn.click(
-        fn=lambda: (None, None),
-        outputs=[history_state, image_hash_state],
+        fn=lambda: (None, None, "", None, None, None, None, None),
+        outputs=[image_input, audio_input, text_input, text_output, audio_output, depth_output, history_state, image_hash_state],
     )
 
 if __name__ == "__main__":
@@ -188,6 +212,7 @@ if __name__ == "__main__":
         return _orig_httpx_get(url, **kwargs)
     httpx.get = _httpx_get_no_verify_localhost
 
+    demo.queue()
     demo.launch(
         server_name="0.0.0.0",
         ssl_certfile="/home/dan-parii/ml-workstation.tail9deb72.ts.net.crt",

@@ -124,8 +124,8 @@ US4:
 - [x] A1 Lane 1: US1 gate sweep (G1 + G2 + G3)
 - [x] A2 Lane 2: US2 out-of-vocabulary flow checks (G4)
 - [x] A3 Lane 3: US3 safety-richness scene checks (G5)
-- [ ] A4 Lane 4: if a gate is blocked, run E1/E2/E3, then rerun blocked gate checks
-- [ ] A5 Lane 5: if all gates pass, proceed to Phase 8
+- [x] A4 Lane 4: if a gate is blocked, run E1/E2/E3, then rerun blocked gate checks
+- [x] A5 Lane 5: if all gates pass, proceed to Phase 8
 
 **Checkpoint**: All gates G1–G5 pass → advance to Phase 8 Polish
 
