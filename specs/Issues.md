@@ -8,6 +8,6 @@ Possible solutions:
 - Introduce a condition to it's thinking, underline that it is a blind perosn, and that they would walk to that object, if the object that they desire has other objects in the way which are closer, and in the same direction, then those objects are obstacles, the person cannot walk thourhg them. They have to go around them. YOu can find the exact sitance to the obstacle, and then tell the user to walk around that....., 
 
 
-- Perhaps a solution can be to  Have another gemma assistant tasked abvout reasoning about this specific thing. They would be a navigation agent, the task of one agent would be to draw boxes
+- Perhaps a solution can be to  Have another gemma assistant tasked abvout reasoning about this specific thing. They would be a navigation agent, the task of one agent would be to draw boxes of the target object and otehr obstalces standing in the way, the task of another agent would be navaigation around said boxes
 
 
