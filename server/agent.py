@@ -54,7 +54,6 @@ Tool-use requirements:
 8. Prefer parallel measure_object calls for multi-instance cases.
 9. If measure_object indicates class mismatch/substitution or returns error, do not report distance for the requested object. Retry with a tighter box or use search_seg_classes/call_encoder_zero_shot.
 10. For scene description questions (intent C), you MUST call call_dpt_head and then call measure_object for every navigation-relevant detected class (skip wall, floor, ceiling, sky) before generating the scene summary. Do not describe the scene from the image alone.
-11. If call_dpt_head returns a safety_cues list, each entry is a pre-computed near-forward hazard (within ±5° of straight ahead and closer than 2 m). Include every entry as an explicit safety cue in the scene summary, even if you did not call measure_object for it.
 
 Direction and reporting rules:
 - measure_object returns direction text. Use that direction phrase verbatim.
@@ -74,15 +73,15 @@ B) Location/direction question
     "<object> is visible <direction>, but I could not measure distance reliably."
 
 C) Scene question (example: "What is around me?")
-- Describe the scene first in concise, practical terms (layout, main nearby objects, pathway/opening cues).
-- Then explicitly flag any close near-forward hazard (around straight ahead and close distance) as the safety cue.
-- Then include one optional next-step question.
+- Describe the scene in concise, practical terms (layout, main nearby objects, pathway/opening cues).
+- Flag the closest objects straight ahead as potential hazards.
+- Include one optional next-step question.
 - Keep concise and navigation-first.
 
 D) Navigation question (example: "How do I get there?")
-- First identify and measure the destination object instance (distance + direction).
-- Measure relevant intervening obstacles along the likely path.
-- Provide practical step-by-step guidance using those measured distances and directions.
+- First identify and measure the destination object instance using measure_object with include_obstacles=true.
+- If the result contains an "obstacles" list, every entry is a confirmed object blocking the direct path — do not skip or ignore them.
+- Provide practical step-by-step guidance: for each obstacle state its distance and direction, then tell the user which side to step around it before continuing toward the destination.
 - If destination is ambiguous or not visible, ask one clarifying question and provide the safest immediate next step.
 
 Behavior examples (follow structure, do not copy verbatim):
@@ -99,7 +98,7 @@ Tool-call examples (illustrative few-shot flow):
 - User: "What is around me?"
     Assistant tool flow: call_dpt_head -> measure_object on up to 5 navigation-relevant classes (including near-forward hazards) -> final scene summary with explicit close-front safety cue.
 - User: "How do I get to the door?"
-    Assistant tool flow: call_dpt_head -> measure_object(destination door) -> measure_object(intervening obstacles) -> final distance-aware path guidance.
+    Assistant tool flow: call_dpt_head -> measure_object(destination door, include_obstacles=true) -> final distance-aware path guidance using the returned obstacles list.
 - User: "How do I get to the shopping cart?" (OOV class)
     Assistant tool flow: search_seg_classes("shopping cart") -> call_encoder_zero_shot(["shopping cart"]) -> measure_object("shopping cart", box_2d) -> measure_object(intervening obstacles) -> final distance-aware path guidance.
 
@@ -234,6 +233,7 @@ def _dispatch_tool(name: str, args: dict[str, Any], session: Session) -> str:
                 args["class_name"],
                 args["box_2d"],
                 session,
+                include_obstacles=args.get("include_obstacles", False),
             )
         else:
             result = {"error": f"Unknown tool: {name}"}

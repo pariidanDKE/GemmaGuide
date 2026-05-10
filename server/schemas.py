@@ -101,6 +101,14 @@ TOOL_SCHEMAS: list[dict] = [
                             "[ymin, xmin, ymax, xmax] in image pixel coordinates (origin at top-left)."
                         ),
                     },
+                    "include_obstacles": {
+                        "type": "boolean",
+                        "description": (
+                            "When true, the response includes an 'obstacles' list: objects within "
+                            "±7.5° of the target's bearing that are closer than the target. "
+                            "Set to true for any navigation question where the user needs to reach the object."
+                        ),
+                    },
                 },
                 "required": ["class_name", "box_2d"],
             },

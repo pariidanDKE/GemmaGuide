@@ -76,7 +76,10 @@ async def api_query(
     # ── Retrieve session history ──────────────────────────────
     history = _sessions.get(session_id)
     is_first = history is None
-    send_image = pil_image is not None
+    # Only send the image on the first turn — subsequent turns already have
+    # it in conversation history, and resending accumulates copies that hit
+    # the model's per-prompt image limit.
+    send_image = pil_image is not None and is_first
 
     # ── Run pipeline ──────────────────────────────────────────
     response_text = ""

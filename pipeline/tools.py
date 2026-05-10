@@ -330,49 +330,84 @@ def search_seg_classes(query: str) -> dict:
     return {"matches": matches}
 
 
-_SAFETY_CUE_DISTANCE_M = 2.0
-_SAFETY_CUE_BEARING_DEG = 5.0
-_SKIP_CLASSES = {"wall", "floor", "ceiling", "sky"}
+_OBSTACLE_HALF_ANGLE_DEG = 7.5
+_MIN_CLASS_PIXELS_CORRIDOR = 200
+_SKIP_CLASSES = {"wall", "floor", "ceiling"}
 
 
-def _compute_safety_cues(
+def _obstacles_in_corridor(
     depth_tensor: torch.Tensor,
     seg_mask: torch.Tensor,
-    detected: list[str],
     session: Session,
+    center_bearing_deg: float,
+    max_distance_m: float,
+    half_angle_deg: float = _OBSTACLE_HALF_ANGLE_DEG,
+    exclude_class: str | None = None,
 ) -> list[dict]:
+    """Return objects within a bearing corridor that are closer than max_distance_m."""
     H, W = seg_mask.shape
     orig_w, _ = session.image.size
     scale_x = W / float(orig_w)
     cx_dpt = session.intrinsics.cx * scale_x
     fx_dpt = session.intrinsics.fx * scale_x
 
-    half_width = fx_dpt * tan(radians(_SAFETY_CUE_BEARING_DEG))
-    x_lo = max(0, int(round(cx_dpt - half_width)))
-    x_hi = min(W, int(round(cx_dpt + half_width)))
+    center_x = cx_dpt + fx_dpt * tan(radians(center_bearing_deg))
+    half_width = fx_dpt * tan(radians(half_angle_deg))
+    x_lo = max(0, int(round(center_x - half_width)))
+    x_hi = min(W, int(round(center_x + half_width)))
     if x_hi <= x_lo:
         return []
 
     depth_2d = depth_tensor.squeeze()
-    forward_col_mask = torch.zeros(H, W, dtype=torch.bool)
-    forward_col_mask[:, x_lo:x_hi] = True
+    corridor_mask = torch.zeros(H, W, dtype=torch.bool)
+    corridor_mask[:, x_lo:x_hi] = True
 
+    detected_all = get_detected_classes(seg_mask)
     cues = []
-    for cls_name in detected:
+    for cls_name in detected_all:
         if cls_name in _SKIP_CLASSES:
+            continue
+        if exclude_class and cls_name == exclude_class:
             continue
         try:
             cls_idx = ADE20K_CLASSES.index(cls_name)
         except ValueError:
             continue
-        class_mask = (seg_mask == cls_idx) & forward_col_mask
-        if class_mask.sum() < 10:
+        class_mask = (seg_mask == cls_idx) & corridor_mask
+        if class_mask.sum() < _MIN_CLASS_PIXELS_CORRIDOR:
             continue
         dist_m = float(depth_2d[class_mask].median().item())
-        if dist_m < _SAFETY_CUE_DISTANCE_M:
-            cues.append({"class_name": cls_name, "approx_distance_m": round(dist_m, 2)})
+        if dist_m < max_distance_m:
+            _, xs = torch.where(class_mask)
+            px = float(xs.float().mean().item())
+            px_orig = px * (orig_w / float(W))
+            bearing_deg = degrees(atan2((px_orig - session.intrinsics.cx) / session.intrinsics.fx, 1.0))
+            bearing_rounded = round(bearing_deg, 2)
+            abs_bearing = abs(bearing_rounded)
+            if abs_bearing <= 10:
+                direction = "straight ahead"
+            elif bearing_rounded < 0:
+                direction = f"about {abs_bearing:.0f} degrees to your left"
+            else:
+                direction = f"about {abs_bearing:.0f} degrees to your right"
+            cues.append({"class_name": cls_name, "distance_m": round(dist_m, 2), "direction": direction, "_bearing": bearing_rounded})
 
-    return sorted(cues, key=lambda c: c["approx_distance_m"])
+    sorted_cues = sorted(cues, key=lambda c: c["distance_m"])
+
+    # Deduplicate co-located objects (e.g. monitor + computer): same physical
+    # entity if within 0.3m depth AND within 15° bearing. Keep nearest.
+    deduplicated: list[dict] = []
+    for cue in sorted_cues:
+        if not any(
+            abs(cue["distance_m"] - kept["distance_m"]) < 0.3
+            and abs(cue["_bearing"] - kept["_bearing"]) < 15.0
+            for kept in deduplicated
+        ):
+            deduplicated.append(cue)
+
+    for cue in deduplicated:
+        del cue["_bearing"]
+    return deduplicated
 
 
 # ── T009: call_dpt_head ──────────────────────────────────────────────────────
@@ -389,25 +424,20 @@ def call_dpt_head(session: Session) -> dict:
         logger.info("debug_dir=%s", debug_dir)
     detected_all = get_detected_classes(seg_mask)
     top_detected = get_detected_classes(seg_mask, top_k=_DETECTED_CLASSES_TOP_K)
-    safety_cues = _compute_safety_cues(depth_tensor, seg_mask, detected_all, session)
     logger.info(
-        "tool=call_dpt_head depth_shape=%s seg_shape=%s detected_all=%s top_k=%s safety_cues=%s latency=%.3fs",
+        "tool=call_dpt_head depth_shape=%s seg_shape=%s detected_all=%s top_k=%s latency=%.3fs",
         tuple(depth_tensor.shape),
         tuple(seg_mask.shape),
         len(detected_all),
         len(top_detected),
-        len(safety_cues),
         time.monotonic() - t0,
     )
-    result: dict = {"status": "ready", "detected_classes": top_detected}
-    if safety_cues:
-        result["safety_cues"] = safety_cues
-    return result
+    return {"status": "ready", "detected_classes": top_detected}
 
 
 # ── T010: measure_object ─────────────────────────────────────────────────────
 
-def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict:
+def measure_object(class_name: str, box_2d: list[int], session: Session, include_obstacles: bool = False) -> dict:
     orig_w, orig_h = session.image.size
     box_original = _normalize_box_to_original_coords(box_2d, orig_w, orig_h)
 
@@ -576,6 +606,15 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
             )
         else:
             out["note"] = f"'{class_name}' not found in box — used dominant class '{used_class_name}' instead."
+
+    if include_obstacles and session.seg_mask is not None:
+        obstacles = _obstacles_in_corridor(
+            session.depth_tensor, session.seg_mask, session,
+            center_bearing_deg=bearing_rounded,
+            max_distance_m=distance_m,
+            exclude_class=used_class_name,
+        )
+        out["obstacles"] = obstacles
 
     session.measurements.append({
         "class_name": used_class_name,
