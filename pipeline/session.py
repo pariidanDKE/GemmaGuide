@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 import torch
 from PIL import Image, ImageOps
@@ -22,6 +22,26 @@ class Session:
     spatial_report: Optional[str] = field(default=None)
 
     measurements: list[dict] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=lambda: {
+        "timings": [],
+        "summary": {},
+        "counts": {},
+    })
+
+    def add_timing(self, stage: str, seconds: float, **meta: Any) -> None:
+        seconds_rounded = round(float(seconds), 3)
+        entry: dict[str, Any] = {"stage": stage, "seconds": seconds_rounded}
+        entry.update(meta)
+        self.metrics["timings"].append(entry)
+        self.metrics["summary"][stage] = round(self.metrics["summary"].get(stage, 0.0) + seconds_rounded, 3)
+        self.metrics["counts"][stage] = int(self.metrics["counts"].get(stage, 0) + 1)
+
+    def export_metrics(self) -> dict[str, Any]:
+        return {
+            "timings": list(self.metrics["timings"]),
+            "summary": dict(self.metrics["summary"]),
+            "counts": dict(self.metrics["counts"]),
+        }
 
     def release(self) -> None:
         self.depth_tensor = None
@@ -32,6 +52,7 @@ def create_session(
     image: Optional[Image.Image],
     question: str | bytes,
     intrinsics: CameraIntrinsics | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> Session:
     if image is not None:
         # Extract focal length from EXIF before any conversion strips it
@@ -46,4 +67,9 @@ def create_session(
         image=image,
         question=question,
         intrinsics=intrinsics,
+        metrics=metrics if metrics is not None else {
+            "timings": [],
+            "summary": {},
+            "counts": {},
+        },
     )

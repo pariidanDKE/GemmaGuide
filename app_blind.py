@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import re
+import time
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -15,7 +16,7 @@ from pydub import AudioSegment
 
 from pipeline.session import create_session
 from pipeline.tts import synthesize
-from server.agent import run_mapper_loop, run_navigator_loop
+from server.agent import build_turn_user_content, run_mapper_loop, run_navigator_loop, run_scout_loop
 from pipeline.tools import render_annotated_image
 
 logging.basicConfig(level=logging.INFO)
@@ -24,8 +25,10 @@ logger = logging.getLogger(__name__)
 app = FastAPI()
 
 # Server-side session data keyed by session_id.
-# Each entry stores navigator conversation history and the last set of measurements
-# (tensors stripped) so the mapper can skip redundant re-measurement on follow-ups.
+# Each entry stores:
+# - shared user/assistant conversation history
+# - the last set of measurements (tensors stripped)
+# - the last image so follow-up turns can still enter the spatial pipeline
 _sessions: dict[str, dict] = {}
 
 _HTML = os.path.join(os.path.dirname(__file__), "designs", "blind_first_phone_v2.html")
@@ -37,6 +40,35 @@ def _strip_markdown(text: str) -> str:
     text = re.sub(r"`{1,3}.*?`{1,3}", "", text, flags=re.DOTALL)
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     return text.strip()
+
+
+def _summarize_metrics(summary: dict[str, float], counts: dict[str, int], limit: int = 10) -> list[dict]:
+    ranked = sorted(summary.items(), key=lambda item: item[1], reverse=True)
+    return [
+        {
+            "stage": stage,
+            "seconds": round(seconds, 3),
+            "count": int(counts.get(stage, 0)),
+        }
+        for stage, seconds in ranked[:limit]
+    ]
+
+
+def _merge_metrics(existing: dict | None, turn_metrics: dict) -> dict:
+    merged = {
+        "turns": list((existing or {}).get("turns", [])),
+        "summary": dict((existing or {}).get("summary", {})),
+        "counts": dict((existing or {}).get("counts", {})),
+    }
+    merged["turns"].append({
+        "summary": dict(turn_metrics.get("summary", {})),
+        "counts": dict(turn_metrics.get("counts", {})),
+    })
+    for stage, seconds in turn_metrics.get("summary", {}).items():
+        merged["summary"][stage] = round(float(merged["summary"].get(stage, 0.0)) + float(seconds), 3)
+    for stage, count in turn_metrics.get("counts", {}).items():
+        merged["counts"][stage] = int(merged["counts"].get(stage, 0) + int(count))
+    return merged
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -78,53 +110,90 @@ async def api_query(
 
     # ── Retrieve session data ─────────────────────────────────
     session_data = _sessions.get(session_id) or {}
-    nav_history = session_data.get("nav")
+    shared_history = session_data.get("history")
     prior_measurements = session_data.get("measurements")
-    is_first = nav_history is None
+    cached_image = session_data.get("image")
+    active_image = pil_image if pil_image is not None else cached_image
+
     # Only send the image on the first turn — subsequent turns already have
-    # it in conversation history, and resending accumulates copies that hit
-    # the model's per-prompt image limit.
-    send_image = pil_image is not None and is_first
+    # it in the shared conversation history.
+    send_image = active_image is not None and shared_history is None
 
     # ── Run pipeline ──────────────────────────────────────────
     response_text = ""
     depth_b64: str | None = None
+    turn_metrics: dict = {"timings": [], "summary": {}, "counts": {}}
+    session_metrics_state = session_data.get("metrics")
+    request_t0 = time.monotonic()
 
     try:
-        session = create_session(pil_image, question)
-
-        # Mapper: populates session.measurements via tool calls.
-        # Passes prior measurements so the mapper can skip already-covered objects.
-        if pil_image is not None:
-            run_mapper_loop(session, prior_measurements=prior_measurements)
-
-        # Render annotated image for Navigator (always, so summary boxes are current)
-        annotated = render_annotated_image(session) if pil_image is not None else None
-
-        if session.depth_colormap:
-            buf = io.BytesIO()
-            session.depth_colormap.save(buf, format="JPEG", quality=85)
-            depth_b64 = base64.b64encode(buf.getvalue()).decode()
-
-        # Navigator: produces all user-facing text; receives annotated image + scene summary
-        nav_image = annotated if annotated is not None else pil_image
-        response_text, updated_nav_history = run_navigator_loop(
-            session,
-            annotated_image=nav_image,
-            history=None if is_first else nav_history,
+        scout_session = create_session(active_image, question)
+        route, scout_text, _scout_trace = run_scout_loop(
+            scout_session,
+            history=shared_history,
             send_image=send_image,
         )
 
-        session.release()
+        if route == "navigator":
+            session = create_session(
+                active_image,
+                question,
+                intrinsics=scout_session.intrinsics,
+                metrics=scout_session.metrics,
+            )
+
+            # Mapper: populates session.measurements via tool calls.
+            if active_image is not None:
+                run_mapper_loop(
+                    session,
+                    history=shared_history,
+                    prior_measurements=prior_measurements,
+                )
+
+            # Render annotated image for Navigator (always, so summary boxes are current)
+            annotated = render_annotated_image(session) if active_image is not None else None
+
+            if session.depth_colormap:
+                buf = io.BytesIO()
+                session.depth_colormap.save(buf, format="JPEG", quality=85)
+                depth_b64 = base64.b64encode(buf.getvalue()).decode()
+
+            # Navigator: produces all user-facing text; receives annotated image + scene summary
+            nav_image = annotated if annotated is not None else active_image
+            response_text, _nav_trace = run_navigator_loop(
+                session,
+                annotated_image=nav_image,
+                history=shared_history,
+                send_image=send_image,
+            )
+            turn_metrics = session.export_metrics()
+            session.release()
+            measurement_state = [
+                {k: v for k, v in m.items() if k != "mask_dpt"}
+                for m in session.measurements
+            ]
+        else:
+            response_text = scout_text
+            turn_metrics = scout_session.export_metrics()
+            measurement_state = prior_measurements
+
+        scout_session.release()
+        total_request_seconds = time.monotonic() - request_t0
+        turn_metrics["timings"].append({"stage": "request.total", "seconds": round(total_request_seconds, 3)})
+        turn_metrics["summary"]["request.total"] = round(total_request_seconds, 3)
+        turn_metrics["counts"]["request.total"] = 1
+        session_metrics_state = _merge_metrics(session_metrics_state, turn_metrics)
 
         if session_id:
+            turn_user_content = build_turn_user_content(active_image, question, send_image=send_image)
+            updated_shared_history = list(shared_history or [])
+            updated_shared_history.append({"role": "user", "content": turn_user_content})
+            updated_shared_history.append({"role": "assistant", "content": response_text})
             _sessions[session_id] = {
-                "nav": updated_nav_history,
-                # Store measurements without tensors for the next mapper turn.
-                "measurements": [
-                    {k: v for k, v in m.items() if k != "mask_dpt"}
-                    for m in session.measurements
-                ],
+                "history": updated_shared_history,
+                "measurements": measurement_state,
+                "image": active_image,
+                "metrics": session_metrics_state,
             }
 
     except ConnectionRefusedError:
@@ -139,15 +208,36 @@ async def api_query(
     # ── TTS ───────────────────────────────────────────────────
     audio_b64: str | None = None
     try:
+        tts_t0 = time.monotonic()
         tts_bytes = synthesize(_strip_markdown(response_text))
         audio_b64 = base64.b64encode(tts_bytes).decode()
+        tts_seconds = round(time.monotonic() - tts_t0, 3)
+        turn_metrics["timings"].append({"stage": "tts.total", "seconds": tts_seconds})
+        turn_metrics["summary"]["tts.total"] = round(float(turn_metrics["summary"].get("tts.total", 0.0)) + tts_seconds, 3)
+        turn_metrics["counts"]["tts.total"] = int(turn_metrics["counts"].get("tts.total", 0) + 1)
+        if session_metrics_state is not None:
+            session_metrics_state["summary"]["tts.total"] = round(float(session_metrics_state["summary"].get("tts.total", 0.0)) + tts_seconds, 3)
+            session_metrics_state["counts"]["tts.total"] = int(session_metrics_state["counts"].get("tts.total", 0) + 1)
+            if session_metrics_state.get("turns"):
+                latest_turn = session_metrics_state["turns"][-1]
+                latest_turn["summary"]["tts.total"] = round(float(latest_turn["summary"].get("tts.total", 0.0)) + tts_seconds, 3)
+                latest_turn["counts"]["tts.total"] = int(latest_turn["counts"].get("tts.total", 0) + 1)
     except Exception as exc:
         logger.warning("TTS failed: %s", exc)
+
+    metrics_payload = {
+        "turn_top": _summarize_metrics(turn_metrics.get("summary", {}), turn_metrics.get("counts", {})),
+        "session_top": _summarize_metrics(
+            (session_metrics_state or {}).get("summary", {}),
+            (session_metrics_state or {}).get("counts", {}),
+        ),
+    }
 
     return JSONResponse({
         "response": response_text,
         "audio_b64": audio_b64,
         "depth_b64": depth_b64,
+        "metrics": metrics_payload,
     })
 
 

@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 from typing import Any
 
@@ -108,6 +109,64 @@ Conversation style:
 """
 SYSTEM_PROMPT = os.getenv("SPATIALSENSE_SYSTEM_PROMPT", SYSTEM_PROMPT)
 
+SCOUT_SYSTEM_PROMPT = """\
+You are Scout for Gemma Guide, a visual assistant for a blind user.
+Primary goal: answer the user's question directly when general visual understanding is enough, and hand off to the spatial navigation pipeline only when metric spatial reasoning is required.
+
+Instruction hierarchy (highest to lowest):
+1) Safety and factuality
+2) Routing requirements
+3) Response-format requirements
+4) Conversation style
+
+Safety and factuality:
+- Never invent text, prices, titles, brands, objects, distances, or directions.
+- If text is unreadable or the image is insufficient, say so briefly.
+- If the answer requires metric distance, direction, obstacle awareness, path guidance, or safe navigation, do not guess. Hand off to the navigator pipeline.
+
+Routing requirements:
+1. Answer directly when the question is about identity, text, title, price, label, brand, color, simple scene description, or other general visual understanding.
+2. Choose type="handoff_navigator" when the user is asking for distance, direction, relative location, obstacle awareness, pathing, scene safety, or navigation guidance.
+3. If the user asks a mixed question, hand off whenever the spatial part is necessary for a safe or complete answer.
+4. Do not choose type="handoff_navigator" for pure reading or recognition questions.
+5. If you can answer directly, do not hand off.
+
+Response-format requirements:
+- Return exactly one JSON object matching this schema:
+  {"type":"direct"|"handoff_navigator","text":"...","reason":"..."}
+- If type is "direct", text must contain the user-facing answer and reason may be empty.
+- If type is "handoff_navigator", text must be empty and reason must briefly explain why spatial analysis is required.
+- Do not return markdown, code fences, or any text outside the JSON object.
+
+Conversation style:
+- Friendly, calm, concise, and practical.
+- The text field should use natural spoken language.
+"""
+
+SCOUT_RESPONSE_SCHEMA: dict[str, Any] = {
+    "name": "scout_response",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "type": {
+                "type": "string",
+                "enum": ["direct", "handoff_navigator"],
+            },
+            "text": {
+                "type": "string",
+                "description": "User-facing answer when type is direct; otherwise empty.",
+            },
+            "reason": {
+                "type": "string",
+                "description": "Brief reason why spatial navigation analysis is required when handing off.",
+            },
+        },
+        "required": ["type", "text", "reason"],
+        "additionalProperties": False,
+    },
+    "strict": True,
+}
+
 MAPPER_SYSTEM_PROMPT = """\
 You are SpatialSense, a navigation assistant for a blind user.
 Primary goal: build a rich measured scene for the navigator using the current image and tool results.
@@ -201,7 +260,6 @@ Style:
 - Friendly, calm, direct.
 """
 
-
 def _looks_like_raw_tool_protocol(text: str) -> bool:
     lowered = text.lower()
     return "<|tool_call" in lowered or "<tool_call" in lowered
@@ -294,14 +352,18 @@ def _build_question_content(question: str | bytes) -> list[dict]:
     return [{"type": "text", "text": question}]
 
 
-def build_messages(image: Image.Image | None, question: str | bytes) -> list[dict]:
+def build_turn_user_content(image: Image.Image | None, question: str | bytes, send_image: bool = True) -> list[dict]:
     content: list[dict] = []
-    if image is not None:
+    if send_image and image is not None:
         content.append({"type": "image_url", "image_url": {"url": _image_to_data_url(image)}})
     content.extend(_build_question_content(question))
+    return content
+
+
+def build_messages(image: Image.Image | None, question: str | bytes) -> list[dict]:
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": content},
+        {"role": "user", "content": build_turn_user_content(image, question)},
     ]
 
 
@@ -333,10 +395,46 @@ def _dispatch_tool(name: str, args: dict[str, Any], session: Session) -> str:
         result = {"error": str(exc)}
 
     latency = round(time.monotonic() - t0, 3)
+    session.add_timing(f"tool.{name}", latency)
     logger.info("tool=%s latency=%.3fs", name, latency)
     if print_tool_io:
         print(f"TOOL_OUTPUT {name}: {json.dumps(result, ensure_ascii=True)}")
     return json.dumps(result)
+
+
+def _extract_json_object(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+    fence_match = re.search(r"```(?:json)?\s*(\{.*\})\s*```", stripped, re.DOTALL)
+    if fence_match:
+        return fence_match.group(1)
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return stripped[start:end + 1]
+    return stripped
+
+
+def _parse_scout_response(text: str) -> tuple[str, str, str]:
+    """Parse Scout JSON into (route, text, reason) with a safe fallback."""
+    try:
+        payload = json.loads(_extract_json_object(text))
+    except json.JSONDecodeError:
+        logger.warning("scout returned non-JSON response; defaulting to direct answer")
+        return "direct", text.strip(), ""
+
+    response_type = payload.get("type")
+    response_text = payload.get("text", "")
+    reason = payload.get("reason", "")
+
+    if response_type == "handoff_navigator":
+        return "navigator", "", str(reason).strip()
+    if response_type == "direct":
+        return "direct", str(response_text).strip(), str(reason).strip()
+
+    logger.warning("scout returned unknown type=%r; defaulting to direct answer", response_type)
+    return "direct", str(response_text or text).strip(), str(reason).strip()
 
 
 def _dispatch_tool_calls(
@@ -418,7 +516,9 @@ def run_agent_loop(
             **request_payload,
         )
         _maybe_dump_response(round_idx, response)
-        logger.info("round=%s llm_latency=%.3fs", round_idx, time.monotonic() - t0)
+        llm_latency = time.monotonic() - t0
+        session.add_timing("agent_loop.llm_round", llm_latency, round=round_idx)
+        logger.info("round=%s llm_latency=%.3fs", round_idx, llm_latency)
 
         choice = response.choices[0]
 
@@ -457,15 +557,78 @@ def run_agent_loop(
         final_text = content
         session.spatial_report = final_text
         messages.append({"role": "assistant", "content": final_text})
-        logger.info("agent_loop_total_latency=%.3fs rounds=%s", time.monotonic() - t_total, round_idx + 1)
+        total_latency = time.monotonic() - t_total
+        session.add_timing("agent_loop.total", total_latency, rounds=round_idx + 1)
+        logger.info("agent_loop_total_latency=%.3fs rounds=%s", total_latency, round_idx + 1)
         return final_text, messages[1:]
 
     err = "I was unable to complete the spatial analysis. Please try again."
-    logger.info("agent_loop_total_latency=%.3fs rounds=%s", time.monotonic() - t_total, MAX_TOOL_ROUNDS)
+    total_latency = time.monotonic() - t_total
+    session.add_timing("agent_loop.total", total_latency, rounds=MAX_TOOL_ROUNDS)
+    logger.info("agent_loop_total_latency=%.3fs rounds=%s", total_latency, MAX_TOOL_ROUNDS)
     return err, messages[1:]
 
 
-def run_mapper_loop(session: Session, prior_measurements: list[dict] | None = None) -> None:
+def run_scout_loop(
+    session: Session,
+    history: list[dict] | None = None,
+    send_image: bool = True,
+) -> tuple[str, str, list[dict]]:
+    """Run Scout: answer directly or hand off to the spatial navigator pipeline.
+
+    Returns (route, text, updated_history) where route is "direct" or "navigator".
+    """
+    t_total = time.monotonic()
+    client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
+
+    user_content = build_turn_user_content(session.image, session.question, send_image=send_image)
+    if history is not None:
+        messages = [{"role": "system", "content": SCOUT_SYSTEM_PROMPT}] + history + [{"role": "user", "content": user_content}]
+    else:
+        messages = [
+            {"role": "system", "content": SCOUT_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+
+    request_payload = {
+        "model": MODEL_ID,
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": SCOUT_RESPONSE_SCHEMA,
+        },
+        "extra_body": {
+            "chat_template_kwargs": {"enable_thinking": True},
+        },
+    }
+    _maybe_dump_request(0, request_payload)
+
+    t0 = time.monotonic()
+    response = client.chat.completions.create(**request_payload)
+    _maybe_dump_response(0, response)
+    llm_latency = time.monotonic() - t0
+    total_latency = time.monotonic() - t_total
+    session.add_timing("scout.llm", llm_latency)
+    session.add_timing("scout.total", total_latency)
+    logger.info(
+        "scout llm_latency=%.3fs total_latency=%.3fs",
+        llm_latency,
+        total_latency,
+    )
+
+    choice = response.choices[0]
+    raw_content = choice.message.content or ""
+    route, final_text, _reason = _parse_scout_response(raw_content)
+    messages.append({"role": "assistant", "content": final_text if route == "direct" else raw_content})
+    return route, final_text, messages[1:]
+
+
+def run_mapper_loop(
+    session: Session,
+    history: list[dict] | None = None,
+    prior_measurements: list[dict] | None = None,
+) -> None:
     """Run the Mapper agent to populate session.measurements via tool calls.
 
     The mapper's text output is discarded — only session.measurements matters.
@@ -478,24 +641,12 @@ def run_mapper_loop(session: Session, prior_measurements: list[dict] | None = No
     t_total = time.monotonic()
     client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
 
-    image_url = _image_to_data_url(session.image)
-
-    is_followup = prior_measurements is not None
-    if is_followup:
-        user_content: list[dict] = [
-            {"type": "image_url", "image_url": {"url": image_url}},
-            *_build_question_content(session.question),
-        ]
-    else:
-        user_content = [
-            {"type": "image_url", "image_url": {"url": image_url}},
-            {"type": "text", "text": "I am blind. Measure every object around me that could affect my navigation or safety — scan the full scene. Also specifically: "},
-            *_build_question_content(session.question),
-        ]
-    messages: list[dict] = [
-        {"role": "system", "content": MAPPER_SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
-    ]
+    messages = build_mapper_messages(
+        session,
+        history=history,
+        prior_measurements=prior_measurements,
+        send_image=True,
+    )
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         request_payload = {
@@ -512,7 +663,9 @@ def run_mapper_loop(session: Session, prior_measurements: list[dict] | None = No
         t0 = time.monotonic()
         response = client.chat.completions.create(**request_payload)
         _maybe_dump_response(round_idx, response)
-        logger.info("mapper round=%s llm_latency=%.3fs", round_idx, time.monotonic() - t0)
+        llm_latency = time.monotonic() - t0
+        session.add_timing("mapper.llm_round", llm_latency, round=round_idx)
+        logger.info("mapper round=%s llm_latency=%.3fs", round_idx, llm_latency)
 
         choice = response.choices[0]
 
@@ -550,12 +703,53 @@ def run_mapper_loop(session: Session, prior_measurements: list[dict] | None = No
         )
         break
 
-    logger.info(
-        "mapper total_latency=%.3fs rounds=%s measurements=%s",
-        time.monotonic() - t_total,
-        round_idx + 1,
-        len(session.measurements),
-    )
+    total_latency = time.monotonic() - t_total
+    session.add_timing("mapper.total", total_latency, rounds=round_idx + 1, measurements=len(session.measurements))
+    logger.info("mapper total_latency=%.3fs rounds=%s measurements=%s", total_latency, round_idx + 1, len(session.measurements))
+
+
+def _build_prior_measurements_context(prior_measurements: list[dict] | None) -> str | None:
+    if not prior_measurements:
+        return None
+    lines = [
+        "Prior measured scene from the earlier conversation. Reuse this context when relevant, but remeasure if the user's current request needs a fresh or more specific measurement:",
+    ]
+    for i, m in enumerate(prior_measurements, start=1):
+        lines.append(
+            f"{i}. {m['class_name']} — {m['tips_distance_m']} m, {m['direction']}"
+        )
+    return "\n".join(lines)
+
+
+def build_mapper_messages(
+    session: Session,
+    history: list[dict] | None = None,
+    prior_measurements: list[dict] | None = None,
+    send_image: bool = True,
+) -> list[dict]:
+    user_content = build_turn_user_content(session.image, session.question, send_image=send_image)
+
+    prefix_parts: list[str] = []
+    prior_context = _build_prior_measurements_context(prior_measurements)
+    if prior_context:
+        prefix_parts.append(prior_context)
+    if prior_measurements is None:
+        prefix_parts.append(
+            "I am blind. Measure every object around me that could affect my navigation or safety — scan the full scene. Also specifically:"
+        )
+    else:
+        prefix_parts.append("Use the conversation and prior measurements to answer this follow-up safely. Also specifically:")
+
+    user_message = {
+        "role": "user",
+        "content": [{"type": "text", "text": "\n\n".join(prefix_parts)}, *user_content],
+    }
+    if history is not None:
+        return [{"role": "system", "content": MAPPER_SYSTEM_PROMPT}] + history + [user_message]
+    return [
+        {"role": "system", "content": MAPPER_SYSTEM_PROMPT},
+        user_message,
+    ]
 
 
 def _build_scene_summary(session: Session) -> str:
@@ -632,10 +826,14 @@ def run_navigator_loop(
     t0 = time.monotonic()
     response = client.chat.completions.create(**request_payload)
     _maybe_dump_response(0, response)
+    llm_latency = time.monotonic() - t0
+    total_latency = time.monotonic() - t_total
+    session.add_timing("navigator.llm", llm_latency)
+    session.add_timing("navigator.total", total_latency)
     logger.info(
         "navigator llm_latency=%.3fs total_latency=%.3fs",
-        time.monotonic() - t0,
-        time.monotonic() - t_total,
+        llm_latency,
+        total_latency,
     )
 
     final_text = response.choices[0].message.content or ""
