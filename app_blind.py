@@ -15,15 +15,18 @@ from pydub import AudioSegment
 
 from pipeline.session import create_session
 from pipeline.tts import synthesize
-from server.agent import run_agent_loop
+from server.agent import run_mapper_loop, run_navigator_loop
+from pipeline.tools import render_annotated_image
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Server-side conversation history keyed by session_id
-_sessions: dict[str, list | None] = {}
+# Server-side session data keyed by session_id.
+# Each entry stores navigator conversation history and the last set of measurements
+# (tensors stripped) so the mapper can skip redundant re-measurement on follow-ups.
+_sessions: dict[str, dict] = {}
 
 _HTML = os.path.join(os.path.dirname(__file__), "designs", "blind_first_phone_v2.html")
 
@@ -73,9 +76,11 @@ async def api_query(
             except Exception as exc:
                 logger.warning("Audio conversion failed: %s", exc)
 
-    # ── Retrieve session history ──────────────────────────────
-    history = _sessions.get(session_id)
-    is_first = history is None
+    # ── Retrieve session data ─────────────────────────────────
+    session_data = _sessions.get(session_id) or {}
+    nav_history = session_data.get("nav")
+    prior_measurements = session_data.get("measurements")
+    is_first = nav_history is None
     # Only send the image on the first turn — subsequent turns already have
     # it in conversation history, and resending accumulates copies that hit
     # the model's per-prompt image limit.
@@ -87,21 +92,40 @@ async def api_query(
 
     try:
         session = create_session(pil_image, question)
-        response_text, updated_history = run_agent_loop(
-            session,
-            history=None if is_first else history,
-            send_image=send_image,
-        )
+
+        # Mapper: populates session.measurements via tool calls.
+        # Passes prior measurements so the mapper can skip already-covered objects.
+        if pil_image is not None:
+            run_mapper_loop(session, prior_measurements=prior_measurements)
+
+        # Render annotated image for Navigator (always, so summary boxes are current)
+        annotated = render_annotated_image(session) if pil_image is not None else None
 
         if session.depth_colormap:
             buf = io.BytesIO()
             session.depth_colormap.save(buf, format="JPEG", quality=85)
             depth_b64 = base64.b64encode(buf.getvalue()).decode()
 
+        # Navigator: produces all user-facing text; receives annotated image + scene summary
+        nav_image = annotated if annotated is not None else pil_image
+        response_text, updated_nav_history = run_navigator_loop(
+            session,
+            annotated_image=nav_image,
+            history=None if is_first else nav_history,
+            send_image=send_image,
+        )
+
         session.release()
 
         if session_id:
-            _sessions[session_id] = updated_history
+            _sessions[session_id] = {
+                "nav": updated_nav_history,
+                # Store measurements without tensors for the next mapper turn.
+                "measurements": [
+                    {k: v for k, v in m.items() if k != "mask_dpt"}
+                    for m in session.measurements
+                ],
+            }
 
     except ConnectionRefusedError:
         response_text = (

@@ -154,13 +154,31 @@ US4:
 
 ---
 
+## Phase 10: Multi-Agent Mapper + Navigator
+
+**Purpose**: Replace the single overloaded agent with a focused two-agent pipeline. The Mapper gathers spatial data via tools; the Navigator reasons about it and produces all natural language.
+
+- [ ] T033 Implement `run_mapper_loop` in `server/agent.py` — same tool-dispatch loop as current `run_agent_loop` but with a stripped system prompt focused purely on tool use (call `call_dpt_head`, then `measure_object` for all relevant objects). Mapper text output is discarded entirely; only `session.measurements` matters.
+
+- [ ] T034 Implement `render_annotated_image` in `pipeline/tools.py` — draw numbered bounding boxes on the original session image using `session.measurements` in order (index 0 = box 1, etc.). Each box labelled `N: <class> <distance>m`. Returns a PIL image.
+
+- [ ] T035 Implement `run_navigator_loop` in `server/agent.py` — fresh LLM call with no tools. Receives: (1) annotated image from T034, (2) plain-text scene summary built deterministically by Python from `session.measurements` (numbered list matching box labels), (3) original audio/text question. Navigator system prompt focused entirely on navigation and spatial reasoning. Produces all user-facing natural language.
+
+- [ ] T036 Wire orchestration in `app_blind.py` — replace `run_agent_loop` call with: `run_mapper_loop` → `render_annotated_image` → `run_navigator_loop`. Always runs both agents for every query.
+
+- [ ] T037 Write Mapper system prompt — tool-use only instructions, no output format section, no natural language guidance. Must instruct: call `call_dpt_head` first; call `measure_object` for every object relevant to the question; stop after measurements are complete.
+
+- [ ] T038 Write Navigator system prompt — spatial reasoning and navigation instructions only, no tool-use section. Must instruct: use the numbered image boxes and scene summary to reason about paths and obstacles; produce concise spoken-friendly natural language; handle all question intents (distance, scene, navigation).
+
+---
+
 ## Phase 9: Phone Access Stretch Goals (Post-v1, Optional)
 
 **Purpose**: Enable mobile-browser camera capture and phone access to the local demo server
 
-- [ ] T028 [P] [Stretch] Add mobile browser image capture option in `app.py` — support camera capture via web-compatible input path (mobile browser file capture / camera source) while preserving desktop upload flow
-- [ ] T029 [Stretch] Add LAN-access run mode documentation in `quickstart.md` — bind server to `0.0.0.0`, document how to open from phone using host LAN IP and port, and include microphone/camera permission notes
-- [ ] T030 [Stretch] Validate phone-to-local-server flow on at least one Android or iOS device — capture image on phone, ask spoken question, receive spoken response; document known browser limitations in `quickstart.md`
+- [X] T028 [P] [Stretch] Add mobile browser image capture option in `app.py` — support camera capture via web-compatible input path (mobile browser file capture / camera source) while preserving desktop upload flow
+- [X] T029 [Stretch] Add LAN-access run mode documentation in `quickstart.md` — bind server to `0.0.0.0`, document how to open from phone using host LAN IP and port, and include microphone/camera permission notes
+- [X] T030 [Stretch] Validate phone-to-local-server flow on at least one Android or iOS device — capture image on phone, ask spoken question, receive spoken response; document known browser limitations in `quickstart.md`
 
 ---
 

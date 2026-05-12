@@ -98,15 +98,11 @@ TOOL_SCHEMAS: list[dict] = [
                         "items": {"type": "integer"},
                         "description": (
                             "Bounding box of the target object instance: "
-                            "[ymin, xmin, ymax, xmax] in image pixel coordinates (origin at top-left)."
-                        ),
-                    },
-                    "include_obstacles": {
-                        "type": "boolean",
-                        "description": (
-                            "When true, the response includes an 'obstacles' list: objects within "
-                            "±7.5° of the target's bearing that are closer than the target. "
-                            "Set to true for any navigation question where the user needs to reach the object."
+                            "[ymin, xmin, ymax, xmax] in image pixel coordinates (origin at top-left). "
+                            "The box does not need to cover the whole object — a partial box around the "
+                            "visible portion is valid and preferred for objects near the image edge or "
+                            "partially occluded. Draw the box tightly around whatever part of the object "
+                            "is visible."
                         ),
                     },
                 },

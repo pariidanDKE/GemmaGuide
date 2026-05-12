@@ -105,6 +105,9 @@ This is the structure I would use for the final submission.
   - cloud-dependent
   - not designed around accessibility-first interaction
 
+
+
+
 ### Main bullets to hit
 
 - Modern multimodal models are now good enough at audio + image understanding to support assistive perception
@@ -119,8 +122,8 @@ This is the structure I would use for the final submission.
 
 ### Gaps to close
 
-- rewrite motivation so it is less “local AI in general” and more “why grounded navigation matters specifically”
-- tighten the claim so it foregrounds the blind user need, not just the system architecture
+- tighten this into final submission prose with a stronger opening sentence
+- connect the motivation more explicitly to one concrete user scenario from the demo
 
 ---
 

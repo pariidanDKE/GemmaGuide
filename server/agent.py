@@ -79,9 +79,9 @@ C) Scene question (example: "What is around me?")
 - Keep concise and navigation-first.
 
 D) Navigation question (example: "How do I get there?")
-- First identify and measure the destination object instance using measure_object with include_obstacles=true.
-- If the result contains an "obstacles" list, every entry is a confirmed object blocking the direct path — do not skip or ignore them.
-- Provide practical step-by-step guidance: for each obstacle state its distance and direction, then tell the user which side to step around it before continuing toward the destination.
+- First identify and measure the destination object instance using measure_object.
+- Then call measure_object on any objects that appear between the user and the destination.
+- Provide practical step-by-step guidance: for each closer object in roughly the same direction, state its distance and direction, then tell the user which side to step around it before continuing toward the destination.
 - If destination is ambiguous or not visible, ask one clarifying question and provide the safest immediate next step.
 
 Behavior examples (follow structure, do not copy verbatim):
@@ -98,7 +98,7 @@ Tool-call examples (illustrative few-shot flow):
 - User: "What is around me?"
     Assistant tool flow: call_dpt_head -> measure_object on up to 5 navigation-relevant classes (including near-forward hazards) -> final scene summary with explicit close-front safety cue.
 - User: "How do I get to the door?"
-    Assistant tool flow: call_dpt_head -> measure_object(destination door, include_obstacles=true) -> final distance-aware path guidance using the returned obstacles list.
+    Assistant tool flow: call_dpt_head -> measure_object(door) + measure_object on any objects between user and door -> final distance-aware path guidance.
 - User: "How do I get to the shopping cart?" (OOV class)
     Assistant tool flow: search_seg_classes("shopping cart") -> call_encoder_zero_shot(["shopping cart"]) -> measure_object("shopping cart", box_2d) -> measure_object(intervening obstacles) -> final distance-aware path guidance.
 
@@ -107,6 +107,99 @@ Conversation style:
 - Natural language only; never output raw tool JSON.
 """
 SYSTEM_PROMPT = os.getenv("SPATIALSENSE_SYSTEM_PROMPT", SYSTEM_PROMPT)
+
+MAPPER_SYSTEM_PROMPT = """\
+You are SpatialSense, a navigation assistant for a blind user.
+Primary goal: build a rich measured scene for the navigator using the current image and tool results.
+
+Instruction hierarchy (highest to lowest):
+1) Safety and factuality
+2) Tool-use requirements
+3) Mapper coverage requirements
+4) Conversation style
+
+Safety and factuality:
+- Never invent objects, distances, or directions.
+- Never state a numeric distance unless measure_object returned distance_m for that instance.
+- If an object is visible but unmeasured, leave it unmeasured rather than guessing.
+
+Tool-use requirements:
+1. For object distance/location questions, numeric distance is valid only after a successful measure_object call.
+2. call_dpt_head and call_encoder_zero_shot prepare detections only; by themselves they do not provide distance.
+3. In-vocabulary path: call_dpt_head first, then measure_object for each requested instance.
+4. Out-of-vocabulary/fallback path: use search_seg_classes; if there is no useful ADE match, or if the requested class is not in detected_classes and no close ADE label is reasonable, call call_encoder_zero_shot, then measure_object.
+5. After call_dpt_head, treat detected_classes as the preferred ADE labels for measurement.
+6. If user wording and ADE label differ, only allow near-synonym substitutions (for example chair vs armchair). Never substitute semantically unrelated labels (for example fire extinguisher -> painting).
+7. In multi-instance questions, do not stop after one instance; measure up to 4 clearly visible instances with separate boxes.
+8. Prefer parallel measure_object calls for multi-instance cases.
+9. If measure_object indicates class mismatch/substitution or returns error, do not treat that as a reliable measurement for the requested object. Retry with a tighter box or use search_seg_classes/call_encoder_zero_shot.
+10. For scene description questions, you MUST call call_dpt_head and then call measure_object for every navigation-relevant detected class that matters for safe movement or for the user's question. Do not build the scene from the image alone.
+
+Mapper coverage requirements:
+- Your job is not to answer the user. Your job is to leave behind a measured scene in the tool state for the Navigator.
+- Measure the objects most relevant to the user's question first.
+- Also measure nearby obstacles, close-front hazards, and any objects likely to matter for reaching the target safely.
+- Skip structural background unless it is directly relevant to navigation in this scene. In general skip wall, floor, ceiling, and sky.
+- Prefer a bounded, useful scene over an exhaustive one. Usually 3 to 8 strong measurements are enough.
+- When the user asks about a destination or route, measure the destination first, then measure any closer objects in roughly the same direction that could block or affect the path.
+- When the user asks what is around them, measure the main nearby objects, pathway or opening cues, and the closest straight-ahead hazard.
+- Once you have enough reliable measurements for the Navigator to answer safely, stop calling tools.
+
+Direction and reporting rules:
+- measure_object returns direction text. Use that direction phrase verbatim when reasoning about whether another object is in roughly the same direction.
+- If multiple relevant instances are visible, explicitly measure multiple instances when needed to resolve the user's question safely.
+
+Conversation style:
+- Use tools, not prose, to do the work.
+- If you produce text after finishing tool use, keep it brief. Do not answer the user in detail.
+"""
+
+NAVIGATOR_SYSTEM_PROMPT = """\
+You are the Navigator for SpatialSense, a navigation assistant for blind users. You receive:
+- An image of the scene with numbered bounding boxes labeled "N: class distance_m"
+- A scene summary listing every measurement: box number, class, distance in meters, and direction
+- The user's spoken question
+
+Your job is to answer using only the data in the scene summary. Never state a distance not in the summary. If an object is visible in the image but absent from the summary, say it is visible but unmeasured. Never guess distances from visual appearance.
+
+Direction rule: use the direction phrase from the scene summary verbatim. Do not paraphrase it.
+
+Safety and factuality:
+- Never invent objects, distances, or directions.
+- If an object is visible but not in the summary, say it is visible but unmeasured.
+
+Response by intent:
+
+A) Object distance:
+- Single instance: "[class] is [distance] meters away, [direction]."
+- Multiple instances: "I can see [N] [class_plural]. The nearest is [distance] meters, [direction]. I also see [brief summary of others]. Are you asking about a specific one?"
+
+B) Direction/location:
+- Direction first, distance second. If unmeasured: "[class] is visible [direction], but distance could not be measured."
+
+C) Scene description:
+- Practical layout: main nearby objects, any open path or gap visible.
+- Flag the closest object straight ahead as a potential hazard.
+- One follow-up offer at the end.
+
+D) Navigation:
+- Target's distance and direction first.
+- For each object between the user and the target (closer and roughly in the same direction): name it, give its distance and direction, say which side to step around it.
+- If no objects are in the way, say the path looks clear.
+- Step-by-step, distance-first.
+
+Response examples (follow structure, do not copy verbatim):
+- "The table is 2.1 meters away, about 12 degrees to your right."
+- "I can see three chairs. The nearest is 1.4 meters away, straight ahead. I also see one at 2.3 meters to your left and one at 3.0 meters to your right. Are you asking about a specific one?"
+- "You are in a room with a clear opening slightly to your left. Several objects are spread across the center and right side. There is a chair directly ahead at about 1.8 meters — watch out for that. Would you like guidance toward the opening?"
+- "The door is 3.6 meters away, about 9 degrees to your right. There is a chair 1.4 meters ahead near center-left and a table 0.9 meters almost straight ahead. Step slightly left, walk forward about 1.2 meters, then shift right and continue about 2.4 meters to the door. Want me to guide this one step at a time?"
+
+Style:
+- Spoken natural language only. No markdown, no bullet points, no numbered lists.
+- Short and practical — a blind user may be moving while listening.
+- Reference box numbers only when two instances of the same class need to be distinguished (for example: "the chair at box 1 is closer than the one at box 3").
+- Friendly, calm, direct.
+"""
 
 
 def _looks_like_raw_tool_protocol(text: str) -> bool:
@@ -233,7 +326,6 @@ def _dispatch_tool(name: str, args: dict[str, Any], session: Session) -> str:
                 args["class_name"],
                 args["box_2d"],
                 session,
-                include_obstacles=args.get("include_obstacles", False),
             )
         else:
             result = {"error": f"Unknown tool: {name}"}
@@ -304,12 +396,10 @@ def run_agent_loop(
         messages = build_messages(session.image, session.question)
 
     for round_idx in range(MAX_TOOL_ROUNDS):
-        tools = _active_tools() if has_image else []
-        request_payload = {
+        tools = _active_tools() if has_image else None
+        request_payload: dict[str, Any] = {
             "model": MODEL_ID,
             "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto" if has_image else "none",
             "parallel_tool_calls": True,
             "max_tokens": MAX_TOKENS,
             "extra_body": {
@@ -318,6 +408,9 @@ def run_agent_loop(
                 }
             },
         }
+        if tools:
+            request_payload["tools"] = tools
+            request_payload["tool_choice"] = "auto"
         _maybe_dump_request(round_idx, request_payload)
 
         t0 = time.monotonic()
@@ -370,3 +463,182 @@ def run_agent_loop(
     err = "I was unable to complete the spatial analysis. Please try again."
     logger.info("agent_loop_total_latency=%.3fs rounds=%s", time.monotonic() - t_total, MAX_TOOL_ROUNDS)
     return err, messages[1:]
+
+
+def run_mapper_loop(session: Session, prior_measurements: list[dict] | None = None) -> None:
+    """Run the Mapper agent to populate session.measurements via tool calls.
+
+    The mapper's text output is discarded — only session.measurements matters.
+    On the first turn (prior_measurements is None) the user message includes the full
+    safety-scan framing. On follow-up turns it sends just the image and the question.
+    """
+    if session.image is None:
+        return
+
+    t_total = time.monotonic()
+    client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
+
+    image_url = _image_to_data_url(session.image)
+
+    is_followup = prior_measurements is not None
+    if is_followup:
+        user_content: list[dict] = [
+            {"type": "image_url", "image_url": {"url": image_url}},
+            *_build_question_content(session.question),
+        ]
+    else:
+        user_content = [
+            {"type": "image_url", "image_url": {"url": image_url}},
+            {"type": "text", "text": "I am blind. Measure every object around me that could affect my navigation or safety — scan the full scene. Also specifically: "},
+            *_build_question_content(session.question),
+        ]
+    messages: list[dict] = [
+        {"role": "system", "content": MAPPER_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+    for round_idx in range(MAX_TOOL_ROUNDS):
+        request_payload = {
+            "model": MODEL_ID,
+            "messages": messages,
+            "tools": _active_tools(),
+            "tool_choice": "auto",
+            "parallel_tool_calls": True,
+            "max_tokens": MAX_TOKENS,
+            "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+        }
+        _maybe_dump_request(round_idx, request_payload)
+
+        t0 = time.monotonic()
+        response = client.chat.completions.create(**request_payload)
+        _maybe_dump_response(round_idx, response)
+        logger.info("mapper round=%s llm_latency=%.3fs", round_idx, time.monotonic() - t0)
+
+        choice = response.choices[0]
+
+        if choice.message.tool_calls:
+            assistant_msg = {
+                "role": "assistant",
+                "content": choice.message.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
+                    }
+                    for tc in choice.message.tool_calls
+                ],
+            }
+            messages.append(assistant_msg)
+            messages.extend(_dispatch_tool_calls(choice.message.tool_calls, session))
+            continue
+
+        content = choice.message.content or ""
+        if _looks_like_raw_tool_protocol(content):
+            logger.warning("mapper round=%s: raw tool protocol text, sending correction", round_idx)
+            messages.append({"role": "assistant", "content": content})
+            messages.append({"role": "user", "content": "Use the structured tool call format, not text. Call call_dpt_head now."})
+            continue
+
+        # No tool calls and no raw protocol — mapper is done
+        logger.info(
+            "mapper round=%s done: finish_reason=%s measurements=%s content=%r",
+            round_idx,
+            choice.finish_reason,
+            len(session.measurements),
+            content[:200],
+        )
+        break
+
+    logger.info(
+        "mapper total_latency=%.3fs rounds=%s measurements=%s",
+        time.monotonic() - t_total,
+        round_idx + 1,
+        len(session.measurements),
+    )
+
+
+def _build_scene_summary(session: Session) -> str:
+    """Build a numbered plain-text scene summary from session.measurements."""
+    if not session.measurements:
+        return "No objects were measured in this scene."
+    lines = ["Scene measurements:"]
+    for i, m in enumerate(session.measurements, start=1):
+        lines.append(f"{i}. {m['class_name']} — {m['tips_distance_m']} m, {m['direction']}")
+    return "\n".join(lines)
+
+
+def run_navigator_loop(
+    session: Session,
+    annotated_image: Image.Image | None,
+    history: list[dict] | None = None,
+    send_image: bool = True,
+) -> tuple[str, list[dict]]:
+    """Run the Navigator agent: single LLM call, no tools, produces all user-facing text.
+
+    Receives the annotated image (numbered bounding boxes), a plain-text scene
+    summary built from session.measurements, and the original user question.
+    """
+    t_total = time.monotonic()
+    client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
+
+    scene_summary = _build_scene_summary(session)
+
+    is_followup = history is not None
+    image_part: list[dict] = []
+    if send_image:
+        image_url = _image_to_data_url(annotated_image)
+        image_part = [{"type": "image_url", "image_url": {"url": image_url}}]
+
+    ref = "the image and the measurements" if send_image else "the measurements"
+    if is_followup:
+        framing = f"Using {ref}, answer my follow-up question: "
+    else:
+        framing = (
+            "I am blind and navigating this space. "
+            "Never state a distance that is not in the measurements above. "
+            "Address my question and also mention all measurements relevant to safely navigating "
+            "toward the answer — including any obstacles or hazards along the way. "
+            f"Using {ref}, answer my question: "
+        )
+
+    question_content: list[dict] = [
+        *image_part,
+        {"type": "text", "text": scene_summary},
+        {"type": "text", "text": framing},
+        *_build_question_content(session.question),
+    ]
+
+    if history is not None:
+        messages: list[dict] = (
+            [{"role": "system", "content": NAVIGATOR_SYSTEM_PROMPT}]
+            + history
+            + [{"role": "user", "content": question_content}]
+        )
+    else:
+        messages = [
+            {"role": "system", "content": NAVIGATOR_SYSTEM_PROMPT},
+            {"role": "user", "content": question_content},
+        ]
+
+    request_payload = {
+        "model": MODEL_ID,
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
+        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
+    }
+    _maybe_dump_request(0, request_payload)
+
+    t0 = time.monotonic()
+    response = client.chat.completions.create(**request_payload)
+    _maybe_dump_response(0, response)
+    logger.info(
+        "navigator llm_latency=%.3fs total_latency=%.3fs",
+        time.monotonic() - t0,
+        time.monotonic() - t_total,
+    )
+
+    final_text = response.choices[0].message.content or ""
+    session.spatial_report = final_text
+    messages.append({"role": "assistant", "content": final_text})
+    return final_text, messages[1:]
