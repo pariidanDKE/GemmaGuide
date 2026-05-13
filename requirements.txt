@@ -1,7 +1,7 @@
-vllm[audio]==0.20.1rc1.dev106+g307b17ce3.cu129
+vllm[audio]==0.20.1
 transformers==5.7.0
-torch==2.11.0+cu129
-torchvision==0.26.0+cu129
+torch==2.11.0
+torchvision==0.26.0
 gradio==6.14.0
 fastapi==0.136.1
 uvicorn==0.46.0
