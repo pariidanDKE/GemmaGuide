@@ -98,7 +98,11 @@ TOOL_SCHEMAS: list[dict] = [
                         "items": {"type": "integer"},
                         "description": (
                             "Bounding box of the target object instance: "
-                            "[ymin, xmin, ymax, xmax] in image pixel coordinates (origin at top-left)."
+                            "[ymin, xmin, ymax, xmax] in image pixel coordinates (origin at top-left). "
+                            "The box does not need to cover the whole object — a partial box around the "
+                            "visible portion is valid and preferred for objects near the image edge or "
+                            "partially occluded. Draw the box tightly around whatever part of the object "
+                            "is visible."
                         ),
                     },
                 },

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from math import atan2, degrees, radians, tan
+from math import atan2, degrees
 import os
 from pathlib import Path
 import re
@@ -27,9 +27,35 @@ _BOX_DEBUG_DIR = os.getenv(
 )
 
 # How many top-coverage ADE classes to surface to Gemma via call_dpt_head.
-# Fringe classes (e.g. "armchair" with 5 stray pixels) are excluded; safety-cue
-# computation inside call_dpt_head still uses the full class list.
-_DETECTED_CLASSES_TOP_K = int(os.getenv("SPATIALSENSE_DETECTED_CLASSES_TOP_K", "5"))
+# Background and outdoor-only classes are filtered out before the k selection
+# so slots go to navigable obstacle classes.
+_DETECTED_CLASSES_TOP_K = int(os.getenv("SPATIALSENSE_DETECTED_CLASSES_TOP_K", "6"))
+
+# ADE20K primary names (first token before ";") to strip from the top-k list.
+# These are either above the user (ceiling/sky), outdoor terrain (grass/mountain/
+# sea/river/…), or venue-specific (runway/grandstand/swimming pool) — none are
+# meaningful navigation obstacles in everyday pedestrian use.
+_TOP_K_EXCLUDE: frozenset[str] = frozenset({
+    "sky",
+    "ceiling",
+    "grass",
+    "mountain",
+    "sea",
+    "field",
+    "sand",
+    "skyscraper",
+    "grandstand",
+    "runway",
+    "river",
+    "hill",
+    "hovel",
+    "dirt",       # primary name of "dirt;track"
+    "land",       # primary name of "land;ground;soil"
+    "swimming",   # primary name of "swimming;pool;..."
+    "waterfall",
+    "lake",
+    "earth",      # primary name of "earth;ground"
+})
 
 # Minimum number of requested-class pixels that must exist inside the bounding box
 # before we trust that class for depth measurement.  Below this threshold the
@@ -330,51 +356,6 @@ def search_seg_classes(query: str) -> dict:
     return {"matches": matches}
 
 
-_SAFETY_CUE_DISTANCE_M = 2.0
-_SAFETY_CUE_BEARING_DEG = 5.0
-_SKIP_CLASSES = {"wall", "floor", "ceiling", "sky"}
-
-
-def _compute_safety_cues(
-    depth_tensor: torch.Tensor,
-    seg_mask: torch.Tensor,
-    detected: list[str],
-    session: Session,
-) -> list[dict]:
-    H, W = seg_mask.shape
-    orig_w, _ = session.image.size
-    scale_x = W / float(orig_w)
-    cx_dpt = session.intrinsics.cx * scale_x
-    fx_dpt = session.intrinsics.fx * scale_x
-
-    half_width = fx_dpt * tan(radians(_SAFETY_CUE_BEARING_DEG))
-    x_lo = max(0, int(round(cx_dpt - half_width)))
-    x_hi = min(W, int(round(cx_dpt + half_width)))
-    if x_hi <= x_lo:
-        return []
-
-    depth_2d = depth_tensor.squeeze()
-    forward_col_mask = torch.zeros(H, W, dtype=torch.bool)
-    forward_col_mask[:, x_lo:x_hi] = True
-
-    cues = []
-    for cls_name in detected:
-        if cls_name in _SKIP_CLASSES:
-            continue
-        try:
-            cls_idx = ADE20K_CLASSES.index(cls_name)
-        except ValueError:
-            continue
-        class_mask = (seg_mask == cls_idx) & forward_col_mask
-        if class_mask.sum() < 10:
-            continue
-        dist_m = float(depth_2d[class_mask].median().item())
-        if dist_m < _SAFETY_CUE_DISTANCE_M:
-            cues.append({"class_name": cls_name, "approx_distance_m": round(dist_m, 2)})
-
-    return sorted(cues, key=lambda c: c["approx_distance_m"])
-
-
 # ── T009: call_dpt_head ──────────────────────────────────────────────────────
 
 def call_dpt_head(session: Session) -> dict:
@@ -388,21 +369,18 @@ def call_dpt_head(session: Session) -> dict:
     if debug_dir:
         logger.info("debug_dir=%s", debug_dir)
     detected_all = get_detected_classes(seg_mask)
-    top_detected = get_detected_classes(seg_mask, top_k=_DETECTED_CLASSES_TOP_K)
-    safety_cues = _compute_safety_cues(depth_tensor, seg_mask, detected_all, session)
+    filtered = [c for c in detected_all if c not in _TOP_K_EXCLUDE]
+    top_detected = filtered[:_DETECTED_CLASSES_TOP_K]
     logger.info(
-        "tool=call_dpt_head depth_shape=%s seg_shape=%s detected_all=%s top_k=%s safety_cues=%s latency=%.3fs",
+        "tool=call_dpt_head depth_shape=%s seg_shape=%s detected_all=%s filtered=%s top_k=%s latency=%.3fs",
         tuple(depth_tensor.shape),
         tuple(seg_mask.shape),
         len(detected_all),
+        len(filtered),
         len(top_detected),
-        len(safety_cues),
         time.monotonic() - t0,
     )
-    result: dict = {"status": "ready", "detected_classes": top_detected}
-    if safety_cues:
-        result["safety_cues"] = safety_cues
-    return result
+    return {"status": "ready", "detected_classes": top_detected}
 
 
 # ── T010: measure_object ─────────────────────────────────────────────────────
@@ -581,9 +559,71 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
         "class_name": used_class_name,
         "box_original": box_original,
         "tips_distance_m": round(distance_m, 3),
+        "direction": direction,
         "mask_dpt": mask,  # (H_dpt, W_dpt) bool tensor — same pixels used for TIPS median
     })
     return out
+
+
+# ── T034: render_annotated_image ────────────────────────────────────────────
+
+_BOX_COLORS = [
+    (255, 80, 80),
+    (80, 200, 80),
+    (80, 120, 255),
+    (255, 200, 50),
+    (200, 80, 255),
+    (50, 220, 220),
+    (255, 140, 0),
+    (200, 200, 200),
+]
+
+
+def render_annotated_image(session: Session) -> Image.Image:
+    """Draw numbered bounding boxes on the original image from session.measurements.
+
+    Each box is labelled "N: class distance_m". Saves a copy to the debug dir.
+    Returns the annotated PIL image.
+    """
+    from PIL import ImageFont
+
+    img = session.image.copy().convert("RGB")
+    draw = ImageDraw.Draw(img)
+    W, H = img.size
+
+    # Scale font and box thickness to image size so labels are readable on any resolution.
+    font_size = max(16, int(min(W, H) * 0.018))
+    box_thickness = max(2, int(min(W, H) * 0.003))
+    pad = max(4, font_size // 4)
+
+    font: ImageFont.ImageFont | ImageFont.FreeTypeFont
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+    except Exception:
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+
+    for i, m in enumerate(session.measurements):
+        ymin, xmin, ymax, xmax = m["box_original"]
+        color = _BOX_COLORS[i % len(_BOX_COLORS)]
+        draw.rectangle((xmin, ymin, xmax, ymax), outline=color, width=box_thickness)
+
+        label = str(i + 1)
+        try:
+            bbox = draw.textbbox((xmin + pad, ymin + pad), label, font=font)
+            draw.rectangle((bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad), fill=(0, 0, 0))
+            draw.text((xmin + pad, ymin + pad), label, fill=color, font=font)
+        except Exception:
+            _draw_text_badge(draw, (xmin + 4, ymin + 4), label)
+
+    out_dir = _session_debug_dir(session)
+    if out_dir is not None:
+        ts = int(time.time() * 1000)
+        img.save(out_dir / f"navigator_annotated__ts-{ts}.png")
+
+    return img
 
 
 # ── T013: call_encoder_zero_shot ─────────────────────────────────────────────

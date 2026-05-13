@@ -136,8 +136,8 @@ US4:
 **Purpose**: Validation, benchmarking, documentation corrections, and hackathon submission
 
 - [ ] T026 [P] Validate `quickstart.md` end-to-end on clean environment — follow all steps, confirm `bash scripts/start_gemma4.sh` starts the server and `python app.py` launches; update Known Issues if anything fails - **Hard Prio**
-- [ ] T031 [P] Implement lightweight debug observability in `server/agent.py` (or logging module) — emit metadata-only logs (`timestamp`, latency, model/tool status, confidence, error class) when enabled, and ensure no raw image/audio/question-text persistence - **Medium Prio, but we should not do this as T31, we should do it much earlier so we have observability over our experiments**
-- [ ] T022 Run Phase 1.7 latency benchmark — measure per-step times (TIPSv2 inference, Gemma agent loop, TTS) across 5 queries; document breakdown against SC-001 (≤ 30s) in `quickstart.md` - **Medium Prio**
+- [X] T031 [P] Implement lightweight debug observability in `server/agent.py` (or logging module) — emit metadata-only logs (`timestamp`, latency, model/tool status, confidence, error class) when enabled, and ensure no raw image/audio/question-text persistence. Implemented via per-agent/per-tool latency logs plus session-level `metrics.turn_top` and `metrics.session_top` summaries returned by `/api/query`.
+- [X] T022 Run Phase 1.7 latency benchmark — measure per-step times (TIPSv2 inference, Gemma agent loop, TTS) across 5 queries; document breakdown against SC-001 (≤ 30s) in `quickstart.md`. Current answer from live traces: the dominant sinks are `tool.call_dpt_head`, the first Mapper LLM round, and in at least one full spatial trace `navigator.llm` was the single largest cost (~9.1s), exceeding any individual Mapper step. `measure_object` calls are comparatively cheap per instance (~0.46–0.50s) and are dispatched in parallel when emitted together.
 - [ ] T019 [P] Empirically compare depth-map colormaps in `pipeline/tips_runner.py` — test plasma, viridis, grayscale on 3 diverse images for demo display quality; set confirmed winner as `DEFAULT_COLORMAP` constant (resolves research.md Decision 3 open item) - **Low Prio**
 - [ ] T020 [P] Validate segmentation threshold in `pipeline/tips_runner.py` — compare argmax default vs. soft threshold at P=0.5 softmax confidence on 5 test images; set approach as `SEGMENTATION_THRESHOLD` constant (resolves research.md Decision 4 open item) - **Not sure what this means, is this at what threshold a pixel is considered to be 100% part of a class fpr the dpt head?**
 - [ ] T021 Run Phase 1.5 TIPSv2 output contract validation — 5 diverse images through full pipeline at 896px short side; confirm VRAM ≤ 16GB via `nvidia-smi`; if OOM, reduce to 672px and update `TIPSV2_SHORT_SIDE` in `pipeline/tips_runner.py`; document in `quickstart.md` Known Issues - Currently we are mostly working with an RTX 3090, perhaps it would be cool to run the demo on the T4, but we can view that as stretch.
@@ -154,13 +154,31 @@ US4:
 
 ---
 
+## Phase 10: Multi-Agent Mapper + Navigator
+
+**Purpose**: Replace the single overloaded agent with a focused two-agent pipeline. The Mapper gathers spatial data via tools; the Navigator reasons about it and produces all natural language.
+
+- [ ] T033 Implement `run_mapper_loop` in `server/agent.py` — same tool-dispatch loop as current `run_agent_loop` but with a stripped system prompt focused purely on tool use (call `call_dpt_head`, then `measure_object` for all relevant objects). Mapper text output is discarded entirely; only `session.measurements` matters.
+
+- [ ] T034 Implement `render_annotated_image` in `pipeline/tools.py` — draw numbered bounding boxes on the original session image using `session.measurements` in order (index 0 = box 1, etc.). Each box labelled `N: <class> <distance>m`. Returns a PIL image.
+
+- [ ] T035 Implement `run_navigator_loop` in `server/agent.py` — fresh LLM call with no tools. Receives: (1) annotated image from T034, (2) plain-text scene summary built deterministically by Python from `session.measurements` (numbered list matching box labels), (3) original audio/text question. Navigator system prompt focused entirely on navigation and spatial reasoning. Produces all user-facing natural language.
+
+- [ ] T036 Wire orchestration in `app_blind.py` — replace `run_agent_loop` call with: `run_mapper_loop` → `render_annotated_image` → `run_navigator_loop`. Always runs both agents for every query.
+
+- [ ] T037 Write Mapper system prompt — tool-use only instructions, no output format section, no natural language guidance. Must instruct: call `call_dpt_head` first; call `measure_object` for every object relevant to the question; stop after measurements are complete.
+
+- [ ] T038 Write Navigator system prompt — spatial reasoning and navigation instructions only, no tool-use section. Must instruct: use the numbered image boxes and scene summary to reason about paths and obstacles; produce concise spoken-friendly natural language; handle all question intents (distance, scene, navigation).
+
+---
+
 ## Phase 9: Phone Access Stretch Goals (Post-v1, Optional)
 
 **Purpose**: Enable mobile-browser camera capture and phone access to the local demo server
 
-- [ ] T028 [P] [Stretch] Add mobile browser image capture option in `app.py` — support camera capture via web-compatible input path (mobile browser file capture / camera source) while preserving desktop upload flow
-- [ ] T029 [Stretch] Add LAN-access run mode documentation in `quickstart.md` — bind server to `0.0.0.0`, document how to open from phone using host LAN IP and port, and include microphone/camera permission notes
-- [ ] T030 [Stretch] Validate phone-to-local-server flow on at least one Android or iOS device — capture image on phone, ask spoken question, receive spoken response; document known browser limitations in `quickstart.md`
+- [X] T028 [P] [Stretch] Add mobile browser image capture option in `app.py` — support camera capture via web-compatible input path (mobile browser file capture / camera source) while preserving desktop upload flow
+- [X] T029 [Stretch] Add LAN-access run mode documentation in `quickstart.md` — bind server to `0.0.0.0`, document how to open from phone using host LAN IP and port, and include microphone/camera permission notes
+- [X] T030 [Stretch] Validate phone-to-local-server flow on at least one Android or iOS device — capture image on phone, ask spoken question, receive spoken response; document known browser limitations in `quickstart.md`
 
 ---
 
