@@ -15,17 +15,35 @@ pip install vllm[audio] transformers torch torchvision \
             gradio gtts numpy pillow matplotlib openai
 ```
 
-## 1. Start the vLLM Server (Gemma 4 4B-IT)
+## 1. Start the vLLM Server
 
 ```bash
 bash scripts/start_gemma4.sh
 ```
+
+Current default profile is the known-good hackathon demo profile for T4-fit work:
+- Gemma served as `google/gemma-4-E4B-it`
+- served name: `gemma-4-e4b-it`
+- quantization: `bitsandbytes`
+- conservative single-sequence vLLM config
 
 The script uses the pyenv virtualenv named `vllm`. Override the binary path if needed:
 
 ```bash
 VLLM_BIN=/path/to/vllm bash scripts/start_gemma4.sh
 ```
+
+Key memory knobs:
+
+```bash
+GPU_MEM_UTIL=0.4 MAX_MODEL_LEN=4096 MAX_NUM_SEQS=1 MAX_SOFT_TOKENS=280 bash scripts/start_gemma4.sh
+```
+
+Notes:
+- `GPU_MEM_UTIL` must still be high enough for vLLM to allocate KV cache. If set too low, the engine fails to start.
+- `MAX_MODEL_LEN` is the cleanest quality-preserving lever for reducing VRAM.
+- `MAX_NUM_SEQS=1` should remain fixed for T4-class runs.
+- `MAX_SOFT_TOKENS` reduces multimodal vision-token budget if more headroom is needed.
 
 Verify it's up: `curl http://localhost:8000/v1/models`
 
@@ -36,7 +54,13 @@ Expected: JSON response listing `gemma-4-e4b-it`.
 TIPSv2 b14-dpt weights download from HuggingFace automatically on first import (`google/tipsv2-b14-dpt`). No manual download needed.
 
 After both models are loaded, monitor VRAM: `watch -n2 nvidia-smi`  
-Expected combined allocation: ~13GB on RTX 3090. If OOM occurs on T4, reduce TIPSv2 input resolution in `pipeline/tips_runner.py` from 896px to 672px short side.
+Current default short-side is `672`, which is the T4-oriented setting. If more detail is needed on larger hardware, override with:
+
+```bash
+SPATIALSENSE_TIPSV2_SHORT_SIDE=896 python app_blind.py
+```
+
+If OOM still occurs on T4, reduce further to `448`.
 
 ## 3. Start the Demo
 
@@ -68,11 +92,19 @@ Integration tests use real model instances. Do not mock TIPSv2 or Gemma outputs 
 
 ## Known Issues and Workarounds
 
-**VRAM OOM on T4**: Reduce TIPSv2 input size:
-```python
-# pipeline/tips_runner.py
-TIPSV2_SHORT_SIDE = 672  # reduce from 896 if OOM on T4
+**VRAM OOM on T4**: Apply the following in order:
+```bash
+# 1. Keep single-sequence serving and lower context first
+GPU_MEM_UTIL=0.4 MAX_MODEL_LEN=2048 MAX_NUM_SEQS=1 bash scripts/start_gemma4.sh
+
+# 2. Lower TIPS input size if needed
+SPATIALSENSE_TIPSV2_SHORT_SIDE=448 python app_blind.py
+
+# 3. Lower multimodal token budget only if still needed
+GPU_MEM_UTIL=0.4 MAX_MODEL_LEN=2048 MAX_NUM_SEQS=1 MAX_SOFT_TOKENS=140 bash scripts/start_gemma4.sh
 ```
+
+Do not set `GPU_MEM_UTIL` arbitrarily low. If it is too small, vLLM may fail to start with `No available memory for the cache blocks`.
 
 **Audio input not working via vLLM**: If direct audio fails (vLLM audio support not yet validated on this path as of Phase 0), the pipeline falls back to Whisper base for STT. Set `AUDIO_FALLBACK=whisper` in your environment and install `openai-whisper`:
 ```bash
@@ -85,6 +117,6 @@ pip install openai-whisper
 
 | Hardware | VRAM | Status |
 |----------|------|--------|
-| Colab T4 | 16GB | Baseline target — validate in Phase 1 item 1.5 |
+| Colab T4 | 16GB | Baseline target — known-good demo profile is E4B + bitsandbytes + conservative vLLM + TIPS short-side 672 |
 | RTX 3090 | 24GB | Confirmed working in Phase 0 (~13GB combined) |
 | Vast.ai RTX 3090 | 24GB | Fallback cloud option |

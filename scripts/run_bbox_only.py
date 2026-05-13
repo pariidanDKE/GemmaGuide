@@ -14,7 +14,7 @@ from PIL import Image, ImageDraw
 
 VLLM_BASE_URL = "http://localhost:8000/v1"
 VLLM_API_KEY = "EMPTY"
-MODEL_ID = "gemma-4-e4b-it"
+MODEL_ID = "gemma-4-e2b-it"
 
 
 def image_to_data_url(image: Image.Image) -> str:

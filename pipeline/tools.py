@@ -557,6 +557,9 @@ def measure_object(class_name: str, box_2d: list[int], session: Session) -> dict
 
     session.measurements.append({
         "class_name": used_class_name,
+        "requested_class_name": class_name,
+        "used_class_name": used_class_name,
+        "class_substituted": class_substituted,
         "box_original": box_original,
         "tips_distance_m": round(distance_m, 3),
         "direction": direction,

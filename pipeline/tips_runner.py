@@ -15,9 +15,9 @@ from torchvision import transforms
 from transformers import AutoModel
 
 # Input resolution for TIPSv2 — both dims rounded to multiples of 14 (ViT-B/14 patch size)
-# 448 = training resolution, 896 = 2x for finer depth. Increase to 1024/1152 for experiments.
+# 448 = training resolution, 672 = T4-friendly default, 896 = 2x for finer depth.
 # Can be overridden per run with env var SPATIALSENSE_TIPSV2_SHORT_SIDE.
-TIPSV2_SHORT_SIDE = int(os.getenv("SPATIALSENSE_TIPSV2_SHORT_SIDE", "896"))
+TIPSV2_SHORT_SIDE = int(os.getenv("SPATIALSENSE_TIPSV2_SHORT_SIDE", "672"))
 
 # Model selection for experiments.
 # DPT model examples: google/tipsv2-b14-dpt, google/tipsv2-l14-dpt

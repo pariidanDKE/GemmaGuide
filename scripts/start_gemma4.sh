@@ -8,8 +8,8 @@ set -e
 # Optimised for vision requests + tool calling.
 #
 # Supported models (set MODEL below):
-#   google/gemma-4-E2B-it   — effective 2B,  ~16GB VRAM
-#   google/gemma-4-E4B-it   — effective 4B,  ~24GB VRAM  ← default
+#   google/gemma-4-E2B-it   — effective 2B,  ~16GB VRAM  ← default
+#   google/gemma-4-E4B-it   — effective 4B,  ~24GB VRAM
 #   google/gemma-4-26b-it   — MoE 26B/4B,   ~80GB VRAM
 #   google/gemma-4-31b-it   — dense 31B,    ~80GB VRAM (2×GPU)
 #
@@ -46,26 +46,30 @@ fi
 # ============================================================================
 # Configuration
 # ============================================================================
-MODEL="google/gemma-4-E4B-it"
-SERVED_NAME="gemma-4-e4b-it"
-PORT=8000
+MODEL="${MODEL:-google/gemma-4-E4B-it}"
+SERVED_NAME="${SERVED_NAME:-gemma-4-e4b-it}"
+PORT="${PORT:-8000}"
 
 # Gemma 4 supports up to 128k tokens, but KV cache scales with context length.
-# For shared-GPU setups, start lower (e.g. 4096-8192).
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
+# For T4/shared-GPU setups, stay conservative by default.
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
 
 # GPU memory fraction (0.0–1.0)
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.6}"
+# Keep this lower when Gemma shares the GPU with TIPSv2.
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.45}"
 
 # Tensor parallelism — set to 2+ for 31B on multi-GPU
 TENSOR_PARALLEL="${TENSOR_PARALLEL:-1}"
 
 # Lower concurrency reduces KV cache pressure.
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 
 # Vision token budget per image — valid values: 70 140 280 560 1120
 # Higher = more detail, more memory; lower = faster
 MAX_SOFT_TOKENS="${MAX_SOFT_TOKENS:-280}"
+
+# Quantization mode should match the selected checkpoint or serving strategy.
+VLLM_QUANTIZATION="${VLLM_QUANTIZATION:-bitsandbytes}"
 
 # Max images / audio per request (audio requires vllm[audio])
 MM_LIMITS='{"image": 4, "audio": 5}'
@@ -79,7 +83,7 @@ echo "Memory profile: gpu_mem_util=$GPU_MEM_UTIL max_model_len=$MAX_MODEL_LEN ma
 
 exec "$VENV_VLLM" serve "$MODEL" \
   --served-model-name "$SERVED_NAME" \
-  --quantization fp8 \
+  --quantization "$VLLM_QUANTIZATION" \
   --port "$PORT" \
   --max-model-len "$MAX_MODEL_LEN" \
   --gpu-memory-utilization "$GPU_MEM_UTIL" \

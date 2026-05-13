@@ -762,7 +762,13 @@ def _build_scene_summary(session: Session) -> str:
         return "No objects were measured in this scene."
     lines = ["Scene measurements:"]
     for i, m in enumerate(session.measurements, start=1):
-        lines.append(f"{i}. {m['class_name']} — {m['tips_distance_m']} m, {m['direction']}")
+        class_name = m["class_name"]
+        requested_class_name = m.get("requested_class_name")
+        if requested_class_name and requested_class_name != class_name:
+            label = f"{requested_class_name} (measured as {class_name})"
+        else:
+            label = class_name
+        lines.append(f"{i}. {label} — {m['tips_distance_m']} m, {m['direction']}")
     return "\n".join(lines)
 
 
