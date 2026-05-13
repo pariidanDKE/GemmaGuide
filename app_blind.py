@@ -10,6 +10,7 @@ import time
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 from PIL import Image
 from pydub import AudioSegment
@@ -32,6 +33,9 @@ app = FastAPI()
 _sessions: dict[str, dict] = {}
 
 _HTML = os.path.join(os.path.dirname(__file__), "designs", "blind_first_phone_v2.html")
+_DESIGNS_DIR = os.path.join(os.path.dirname(__file__), "designs")
+
+app.mount("/designs", StaticFiles(directory=_DESIGNS_DIR), name="designs")
 
 
 def _strip_markdown(text: str) -> str:
@@ -122,6 +126,7 @@ async def api_query(
     # ── Run pipeline ──────────────────────────────────────────
     response_text = ""
     depth_b64: str | None = None
+    response_route = "direct"
     turn_metrics: dict = {"timings": [], "summary": {}, "counts": {}}
     session_metrics_state = session_data.get("metrics")
     request_t0 = time.monotonic()
@@ -133,6 +138,7 @@ async def api_query(
             history=shared_history,
             send_image=send_image,
         )
+        response_route = route
 
         if route == "navigator":
             session = create_session(
@@ -172,10 +178,19 @@ async def api_query(
                 {k: v for k, v in m.items() if k != "mask_dpt"}
                 for m in session.measurements
             ]
+            next_image = active_image
+            next_history = list(shared_history or [])
         else:
             response_text = scout_text
             turn_metrics = scout_session.export_metrics()
-            measurement_state = prior_measurements
+            if route == "restart":
+                measurement_state = None
+                next_image = None
+                next_history = []
+            else:
+                measurement_state = prior_measurements
+                next_image = active_image
+                next_history = list(shared_history or [])
 
         scout_session.release()
         total_request_seconds = time.monotonic() - request_t0
@@ -185,14 +200,15 @@ async def api_query(
         session_metrics_state = _merge_metrics(session_metrics_state, turn_metrics)
 
         if session_id:
-            turn_user_content = build_turn_user_content(active_image, question, send_image=send_image)
-            updated_shared_history = list(shared_history or [])
-            updated_shared_history.append({"role": "user", "content": turn_user_content})
-            updated_shared_history.append({"role": "assistant", "content": response_text})
+            updated_shared_history = next_history
+            if route != "restart":
+                turn_user_content = build_turn_user_content(active_image, question, send_image=send_image)
+                updated_shared_history.append({"role": "user", "content": turn_user_content})
+                updated_shared_history.append({"role": "assistant", "content": response_text})
             _sessions[session_id] = {
                 "history": updated_shared_history,
                 "measurements": measurement_state,
-                "image": active_image,
+                "image": next_image,
                 "metrics": session_metrics_state,
             }
 
@@ -235,6 +251,7 @@ async def api_query(
 
     return JSONResponse({
         "response": response_text,
+        "route": response_route,
         "audio_b64": audio_b64,
         "depth_b64": depth_b64,
         "metrics": metrics_payload,

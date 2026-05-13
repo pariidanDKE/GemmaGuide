@@ -127,15 +127,17 @@ Safety and factuality:
 Routing requirements:
 1. Answer directly when the question is about identity, text, title, price, label, brand, color, simple scene description, or other general visual understanding.
 2. Choose type="handoff_navigator" when the user is asking for distance, direction, relative location, obstacle awareness, pathing, scene safety, or navigation guidance.
-3. If the user asks a mixed question, hand off whenever the spatial part is necessary for a safe or complete answer.
-4. Do not choose type="handoff_navigator" for pure reading or recognition questions.
-5. If you can answer directly, do not hand off.
+3. Choose type="restart_conversation" when the user explicitly asks to start over, clear the conversation, reset the scene, or begin a new scene.
+4. If the user asks a mixed question, hand off whenever the spatial part is necessary for a safe or complete answer.
+5. Do not choose type="handoff_navigator" for pure reading or recognition questions.
+6. If you can answer directly, do not hand off.
 
 Response-format requirements:
 - Return exactly one JSON object matching this schema:
-  {"type":"direct"|"handoff_navigator","text":"...","reason":"..."}
+  {"type":"direct"|"handoff_navigator"|"restart_conversation","text":"...","reason":"..."}
 - If type is "direct", text must contain the user-facing answer and reason may be empty.
 - If type is "handoff_navigator", text must be empty and reason must briefly explain why spatial analysis is required.
+- If type is "restart_conversation", text should briefly tell the user the scene was reset and what to do next. Reason may be empty.
 - Do not return markdown, code fences, or any text outside the JSON object.
 
 Conversation style:
@@ -150,7 +152,7 @@ SCOUT_RESPONSE_SCHEMA: dict[str, Any] = {
         "properties": {
             "type": {
                 "type": "string",
-                "enum": ["direct", "handoff_navigator"],
+                "enum": ["direct", "handoff_navigator", "restart_conversation"],
             },
             "text": {
                 "type": "string",
@@ -430,6 +432,8 @@ def _parse_scout_response(text: str) -> tuple[str, str, str]:
 
     if response_type == "handoff_navigator":
         return "navigator", "", str(reason).strip()
+    if response_type == "restart_conversation":
+        return "restart", str(response_text).strip(), str(reason).strip()
     if response_type == "direct":
         return "direct", str(response_text).strip(), str(reason).strip()
 

@@ -219,8 +219,8 @@
     .btn-action:active { transform: scale(0.974) translateY(2px) !important; }
 
     .btn-action.large {
-      flex: 3;
-      min-height: 120px;
+      flex: 4;
+      min-height: 152px;
       box-shadow:
         0 1px 0 rgba(255,255,255,0.05) inset,
         0 12px 40px rgba(0,0,0,0.55),
@@ -228,8 +228,8 @@
       animation: btn-breathe 4.5s ease-in-out infinite;
     }
     .btn-action.small {
-      flex: 1;
-      min-height: 80px;
+      flex: 1.2;
+      min-height: 96px;
       box-shadow: 0 6px 20px rgba(0,0,0,0.4);
     }
 
@@ -514,9 +514,111 @@
 
     .btn-stop    { background: rgba(255,107,107,0.11); border: 1px solid rgba(255,107,107,0.18); color: var(--red); }
     .btn-restart { background: rgba(91,156,246,0.09);  border: 1px solid rgba(91,156,246,0.18);  color: var(--g-blue); }
+
+    /* ── INTRO GATE ────────────────────────────────────────── */
+    .intro-gate {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.25rem;
+      background: rgba(8, 11, 20, 0.92);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+    }
+    .intro-gate.hidden { display: none; }
+    .intro-card {
+      width: min(100%, 440px);
+      background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.02) 100%);
+      border: 1px solid var(--border-hi);
+      border-radius: 28px;
+      padding: 1.5rem 1.35rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      box-shadow: 0 18px 48px rgba(0,0,0,0.55);
+    }
+    .intro-title {
+      font-family: "Playfair Display", serif;
+      font-size: 1.45rem;
+      font-weight: 700;
+      color: var(--ink);
+      line-height: 1.15;
+    }
+    .intro-copy {
+      font-size: 0.98rem;
+      line-height: 1.6;
+      color: var(--ink-soft);
+    }
+    .intro-actions {
+      display: contents;
+    }
+    .intro-btn {
+      width: 100%;
+      border: none;
+      border-radius: 18px;
+      padding: 1rem 1.1rem;
+      font-family: "Outfit", sans-serif;
+      font-size: 1rem;
+      font-weight: 700;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .intro-btn.primary {
+      color: #fff;
+      background: var(--ask-grad);
+      box-shadow: 0 10px 28px rgba(91,156,246,0.28);
+      min-height: 240px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+      text-align: left;
+      gap: 0.75rem;
+    }
+    .intro-btn-title {
+      font-size: 1.1rem;
+      line-height: 1.2;
+    }
+    .intro-btn-copy {
+      font-size: 0.95rem;
+      font-weight: 500;
+      line-height: 1.55;
+      color: rgba(255,255,255,0.88);
+    }
+    .intro-note {
+      font-size: 0.82rem;
+      color: var(--ink-muted);
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
+
+<div class="intro-gate" id="intro-gate" role="dialog" aria-modal="true" aria-label="Enable audio">
+  <div class="intro-card">
+    <div class="intro-title">Enable Voice And Audio</div>
+    <div class="intro-copy">
+      Gemma Guide works best with microphone access. This enables voice questions and reliably unlocks audio playback on your phone.
+    </div>
+    <div class="intro-actions">
+      <button
+        class="intro-btn primary"
+        id="btn-enable-audio"
+        aria-label="Enable microphone and continue"
+        aria-describedby="intro-note"
+      >
+        <span class="intro-btn-title">Tap Anywhere To Continue</span>
+        <span class="intro-btn-copy">After you tap, your phone may show a microphone permission popup. Choose Allow to use voice questions and hear Gemma Guide clearly.</span>
+      </button>
+    </div>
+    <div class="intro-note" id="intro-note">
+      After audio is enabled, Gemma Guide will read a short welcome instruction and open the main screen.
+    </div>
+  </div>
+</div>
 
 <div id="main">
 
@@ -554,7 +656,7 @@
 
     <!-- State 0: no photo -->
     <div class="btn-stack" id="state-no-photo">
-      <button class="btn-action btn-photo large" id="btn-photo-first" aria-label="Take photo with back camera">
+      <button class="btn-action btn-photo large" id="btn-photo-first" aria-label="Take Photo">
         <div class="btn-icon-box">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
@@ -566,7 +668,7 @@
           <span class="btn-hint">Back camera · start here</span>
         </div>
       </button>
-      <button class="btn-action btn-ask-muted small" id="btn-ask-no-photo" aria-label="Ask a question without a photo">
+      <button class="btn-action btn-ask-muted small" id="btn-ask-no-photo" aria-label="Ask Without Photo">
         <div class="btn-icon-box">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -593,7 +695,7 @@
 
     <!-- State 1+: has photo -->
     <div class="btn-stack" id="state-has-photo" style="display:none">
-      <button class="btn-action btn-ask large" id="btn-ask" aria-label="Record your question">
+      <button class="btn-action btn-ask large" id="btn-ask" aria-label="Ask Question">
         <div class="btn-icon-box">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -607,7 +709,7 @@
           <span class="btn-hint">Tap &amp; speak</span>
         </div>
       </button>
-      <button class="btn-action btn-photo2 small" id="btn-photo-retake" aria-label="Retake photo">
+      <button class="btn-action btn-photo2 small" id="btn-photo-retake" aria-label="Retake Photo">
         <div class="btn-icon-box">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
@@ -631,8 +733,8 @@
       <div class="collapsible-body" id="collapsible-body"></div>
     </div>
     <div class="bottom-row">
-      <button class="btn-reset" id="btn-reset">New Scene / Clear</button>
-      <button class="btn-depth" id="btn-depth">Depth ↓</button>
+      <button class="btn-reset" id="btn-reset" aria-label="New Scene">New Scene / Clear</button>
+      <button class="btn-depth" id="btn-depth" aria-label="Show Depth Map">Depth ↓</button>
     </div>
   </div>
 
@@ -679,6 +781,8 @@
   const stateAnalyzing   = document.getElementById("state-analyzing");
   const audioPanel       = document.getElementById("audio-panel");
   const panelRespTxt     = document.getElementById("panel-response-text");
+  const introGate        = document.getElementById("intro-gate");
+  const btnEnableAudio   = document.getElementById("btn-enable-audio");
   const responseCollapse = document.getElementById("response-collapsible");
   const collapsibleBtn   = document.getElementById("collapsible-btn");
   const collapsibleBody  = document.getElementById("collapsible-body");
@@ -699,23 +803,114 @@
   let queryWithImage   = true;
   let currentImageFile = null;
   let _prevState       = null;   // which state div was showing before analyzing
+  let _welcomePlayed   = false;
   let sessionId = localStorage.getItem("ss_sid") || crypto.randomUUID();
   localStorage.setItem("ss_sid", sessionId);
+
+  const cueAudio = {
+    dictationStart: new Audio("/designs/audio/dictation_start.mp3"),
+    dictationStop:  new Audio("/designs/audio/dictation_stop.mp3"),
+    woosh:          new Audio("/designs/audio/woosh.mp3"),
+    loading:        new Audio("/designs/audio/loading.mp3"),
+  };
+  cueAudio.loading.loop = true;
+  cueAudio.loading.volume = 0.35;
+  cueAudio.woosh.volume = 0.9;
+  cueAudio.dictationStart.volume = 0.9;
+  cueAudio.dictationStop.volume = 0.9;
 
   // ── iOS audio unlock ─────────────────────────────────────────
   // Play a silent sound on first user touch so subsequent .play() calls work.
   let _audioUnlocked = false;
-  function _unlockAudio() {
+  async function _unlockAudio() {
     if (_audioUnlocked) return;
     _audioUnlocked = true;
     const silent = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
     ttsAudio.src = silent;
-    ttsAudio.play().then(() => { ttsAudio.pause(); ttsAudio.src = ""; }).catch(() => {});
+    try {
+      await ttsAudio.play();
+      ttsAudio.pause();
+      ttsAudio.src = "";
+    } catch (_) {}
+    ttsAudio.src = "";
   }
-  document.addEventListener("touchstart", _unlockAudio, { once: true });
-  document.addEventListener("click",      _unlockAudio, { once: true });
 
   // ── Helpers ──────────────────────────────────────────────────
+  function speakAnnouncement(text) {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function playCue(name) {
+    const audio = cueAudio[name];
+    if (!audio) return;
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+    } catch (_) {}
+  }
+
+  function startLoadingCue() {
+    try {
+      cueAudio.loading.currentTime = 0;
+      cueAudio.loading.play().catch(() => {});
+    } catch (_) {}
+  }
+
+  function stopLoadingCue() {
+    try {
+      cueAudio.loading.pause();
+      cueAudio.loading.currentTime = 0;
+    } catch (_) {}
+  }
+
+  function resetConversationState() {
+    sessionId = crypto.randomUUID();
+    localStorage.setItem("ss_sid", sessionId);
+    currentImageFile = null;
+    hasPhoto = false;
+    stateHasPhoto.style.display = "none";
+    stateNoPhoto.style.display = "flex";
+    resetAskButtons();
+    setStatus("ready");
+    responseCollapse.style.display = "none";
+    collapseOpen = false;
+    collapsibleBody.classList.remove("open");
+    chevron.classList.remove("open");
+    stopLoadingCue();
+    window.speechSynthesis?.cancel();
+    ttsAudio.pause();
+    ttsAudio.src = "";
+  }
+
+  function dismissIntroGate() {
+    introGate.classList.add("hidden");
+  }
+
+  async function enableAudioAndEnter() {
+    setStatus("enabling audio…", true);
+    await _unlockAudio();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
+      setStatus("audio ready", true);
+    } catch (err) {
+      console.warn("Microphone access not granted:", err);
+      setStatus("mic denied", false);
+    }
+    dismissIntroGate();
+    if (!_welcomePlayed) {
+      _welcomePlayed = true;
+      speakAnnouncement("Welcome to Gemma Guide. Press the top half of the screen to take a photo. Press the bottom half to ask a question.");
+    }
+  }
+
   function setStatus(label, live = false) {
     statusText.textContent = label;
     dot.classList.toggle("live", live);
@@ -774,6 +969,7 @@
     sessionId = crypto.randomUUID();
     localStorage.setItem("ss_sid", sessionId);
     setStatus("photo taken", true);
+    speakAnnouncement("Photo taken. You can now ask a question.");
     transitionToHasPhoto();
   });
 
@@ -794,6 +990,7 @@
       };
       mediaRecorder.start();
       isRecording = true;
+      playCue("dictationStart");
     } catch (err) {
       setStatus("mic denied", false);
       resetAskButtons();
@@ -803,6 +1000,7 @@
 
   function stopRecording() {
     if (mediaRecorder && isRecording) {
+      playCue("dictationStop");
       mediaRecorder.stop();
       isRecording = false;
     }
@@ -823,6 +1021,13 @@
   // ── Submit ───────────────────────────────────────────────────
   async function submitQuery(withImage) {
     showAnalyzing();
+    if (audioChunks.length > 0) {
+      speakAnnouncement(withImage ? "Sending audio with photo." : "Sending audio only.");
+    } else {
+      speakAnnouncement(withImage ? "Sending text with photo." : "Sending text only.");
+    }
+    playCue("woosh");
+    startLoadingCue();
 
     const fd = new FormData();
     fd.append("session_id", sessionId);
@@ -844,8 +1049,17 @@
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
 
+      if (data.metrics) console.log("Gemma Guide metrics", data.metrics);
+
       panelRespTxt.textContent = data.response || "(No response)";
       showLastResponse(data.response || "");
+
+      if (data.route === "restart") {
+        resetConversationState();
+        speakAnnouncement(data.response || "Starting a new scene.");
+        hideAnalyzing();
+        return;
+      }
 
       if (data.audio_b64) {
         const blob = b64ToBlob(data.audio_b64, "audio/mpeg");
@@ -860,11 +1074,13 @@
         depthImg.style.display = "block";
       }
 
+      stopLoadingCue();
       hideAnalyzing();
       openAudioPanel();
     } catch (err) {
       console.error("Query failed:", err);
       panelRespTxt.textContent = "Could not reach the server. Please check your connection.";
+      stopLoadingCue();
       hideAnalyzing();
       setStatus("error", false);
     }
@@ -883,20 +1099,8 @@
 
   document.getElementById("btn-reset").addEventListener("click", async () => {
     try { await fetch(`/api/session/${sessionId}`, { method: "DELETE" }); } catch {}
-    sessionId = crypto.randomUUID();
-    localStorage.setItem("ss_sid", sessionId);
-    currentImageFile = null;
-    hasPhoto = false;
-    stateHasPhoto.style.display = "none";
-    stateNoPhoto.style.display = "flex";
-    resetAskButtons();
-    setStatus("ready");
-    responseCollapse.style.display = "none";
-    collapseOpen = false;
-    collapsibleBody.classList.remove("open");
-    chevron.classList.remove("open");
-    ttsAudio.pause();
-    ttsAudio.src = "";
+    resetConversationState();
+    speakAnnouncement("Starting a new scene.");
   });
 
   // ── Depth toggle ─────────────────────────────────────────────
@@ -919,6 +1123,7 @@
   function openAudioPanel() {
     audioPanel.classList.add("open");
     setStatus("playing…", true);
+    stopLoadingCue();
     // Try immediate play; if audio hasn't loaded yet fall back to canplay event.
     ttsAudio.play().catch(() => {
       ttsAudio.addEventListener("canplay", () => {
@@ -931,6 +1136,7 @@
   function closeAudioPanel() {
     audioPanel.classList.remove("open");
     ttsAudio.pause();
+    window.speechSynthesis?.cancel();
     setStatus("ready");
   }
 
@@ -943,6 +1149,8 @@
   document.getElementById("panel-backdrop").addEventListener("click", closeAudioPanel);
 
   ttsAudio.addEventListener("ended", () => setStatus("ready"));
+
+  btnEnableAudio.addEventListener("click", enableAudioAndEnter);
 </script>
 
 </body>
