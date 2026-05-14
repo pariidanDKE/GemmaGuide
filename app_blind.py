@@ -32,10 +32,54 @@ app = FastAPI()
 # - the last image so follow-up turns can still enter the spatial pipeline
 _sessions: dict[str, dict] = {}
 
-_HTML = os.path.join(os.path.dirname(__file__), "designs", "blind_first_phone_v2.html")
+_HTML = os.path.join(os.path.dirname(__file__), "designs", "gemma_guide.html")
 _DESIGNS_DIR = os.path.join(os.path.dirname(__file__), "designs")
 
 app.mount("/designs", StaticFiles(directory=_DESIGNS_DIR), name="designs")
+
+_EMPTY_RESPONSE_FALLBACK = (
+    "I could not produce a spoken response for that request. Please try again."
+)
+_MISSING_IMAGE_SPATIAL_FALLBACK = (
+    "I don't currently have a scene photo to analyze. Please take the photo again, then ask that question once more."
+)
+
+
+def _image_to_jpeg_b64(image: Image.Image | None, *, resize_to: tuple[int, int] | None = None) -> str | None:
+    if image is None:
+        return None
+    out = image.convert("RGB")
+    if resize_to is not None and out.size != resize_to:
+        out = out.resize(resize_to, Image.BILINEAR)
+    buf = io.BytesIO()
+    out.save(buf, format="JPEG", quality=85)
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+def _history_for_debug(history: list[dict] | None) -> list[dict]:
+    debug_items: list[dict] = []
+    for message in history or []:
+        role = str(message.get("role", "unknown"))
+        content = message.get("content", "")
+        if isinstance(content, str):
+            preview = content
+        elif isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                block_type = block.get("type")
+                if block_type == "text":
+                    parts.append(str(block.get("text", "")))
+                elif block_type == "image_url":
+                    parts.append("[image]")
+                elif block_type == "input_audio":
+                    parts.append("[audio]")
+                else:
+                    parts.append(f"[{block_type or 'content'}]")
+            preview = " ".join(part for part in parts if part).strip()
+        else:
+            preview = str(content)
+        debug_items.append({"role": role, "text": preview})
+    return debug_items
 
 
 def _strip_markdown(text: str) -> str:
@@ -118,14 +162,28 @@ async def api_query(
     prior_measurements = session_data.get("measurements")
     cached_image = session_data.get("image")
     active_image = pil_image if pil_image is not None else cached_image
+    prior_turn_count = len(shared_history or [])
+    logger.info(
+        "api_query session_id=%s uploaded_image=%s cached_image=%s active_image=%s history=%s prior_measurements=%s",
+        session_id or "<empty>",
+        pil_image is not None,
+        cached_image is not None,
+        active_image is not None,
+        shared_history is not None,
+        prior_measurements is not None,
+    )
 
-    # Only send the image on the first turn — subsequent turns already have
-    # it in the shared conversation history.
-    send_image = active_image is not None and shared_history is None
+    # Send an image on the first turn and whenever the user uploads a fresh one.
+    # Relying only on prior conversation history causes follow-up turns with a new
+    # image to reference stale visual context.
+    send_image = active_image is not None and (shared_history is None or pil_image is not None)
 
     # ── Run pipeline ──────────────────────────────────────────
     response_text = ""
     depth_b64: str | None = None
+    active_image_b64: str | None = None
+    navigator_image_b64: str | None = None
+    measurement_state: list[dict] | None = None
     response_route = "direct"
     turn_metrics: dict = {"timings": [], "summary": {}, "counts": {}}
     session_metrics_state = session_data.get("metrics")
@@ -137,10 +195,42 @@ async def api_query(
             scout_session,
             history=shared_history,
             send_image=send_image,
+            has_active_image=active_image is not None,
         )
         response_route = route
 
         if route == "navigator":
+            if active_image is None:
+                logger.warning(
+                    "scout requested navigator without active image; forcing direct retry message session_id=%s",
+                    session_id or "<empty>",
+                )
+                response_route = "direct"
+                response_text = _MISSING_IMAGE_SPATIAL_FALLBACK
+                turn_metrics = scout_session.export_metrics()
+                active_image_b64 = None
+                measurement_state = prior_measurements
+                next_image = None
+                next_history = list(shared_history or [])
+                scout_session.release()
+                total_request_seconds = time.monotonic() - request_t0
+                turn_metrics["timings"].append({"stage": "request.total", "seconds": round(total_request_seconds, 3)})
+                turn_metrics["summary"]["request.total"] = round(total_request_seconds, 3)
+                turn_metrics["counts"]["request.total"] = 1
+                session_metrics_state = _merge_metrics(session_metrics_state, turn_metrics)
+                if session_id:
+                    updated_shared_history = next_history
+                    turn_user_content = build_turn_user_content(active_image, question, send_image=send_image)
+                    updated_shared_history.append({"role": "user", "content": turn_user_content})
+                    updated_shared_history.append({"role": "assistant", "content": response_text})
+                    _sessions[session_id] = {
+                        "history": updated_shared_history,
+                        "measurements": measurement_state,
+                        "image": next_image,
+                        "metrics": session_metrics_state,
+                    }
+                raise StopIteration
+
             session = create_session(
                 active_image,
                 question,
@@ -152,20 +242,25 @@ async def api_query(
             if active_image is not None:
                 run_mapper_loop(
                     session,
-                    history=shared_history,
+                    history=None,
                     prior_measurements=prior_measurements,
+                    prior_turn_count=prior_turn_count,
+                    fresh_image_attached=pil_image is not None,
                 )
 
             # Render annotated image for Navigator (always, so summary boxes are current)
             annotated = render_annotated_image(session) if active_image is not None else None
 
             if session.depth_colormap:
-                buf = io.BytesIO()
-                session.depth_colormap.save(buf, format="JPEG", quality=85)
-                depth_b64 = base64.b64encode(buf.getvalue()).decode()
+                depth_b64 = _image_to_jpeg_b64(
+                    session.depth_colormap,
+                    resize_to=active_image.size if active_image is not None else None,
+                )
 
             # Navigator: produces all user-facing text; receives annotated image + scene summary
             nav_image = annotated if annotated is not None else active_image
+            active_image_b64 = _image_to_jpeg_b64(active_image)
+            navigator_image_b64 = _image_to_jpeg_b64(nav_image)
             response_text, _nav_trace = run_navigator_loop(
                 session,
                 annotated_image=nav_image,
@@ -183,6 +278,7 @@ async def api_query(
         else:
             response_text = scout_text
             turn_metrics = scout_session.export_metrics()
+            active_image_b64 = _image_to_jpeg_b64(active_image)
             if route == "restart":
                 measurement_state = None
                 next_image = None
@@ -217,9 +313,15 @@ async def api_query(
             "Could not connect to the Gemma model server. "
             "Please make sure the vLLM server is running."
         )
+    except StopIteration:
+        pass
     except Exception as exc:
         logger.exception("Pipeline error: %s", exc)
         response_text = "Something went wrong. Please try again."
+
+    if not response_text.strip():
+        logger.warning("empty response_text for route=%s; using fallback", response_route)
+        response_text = _EMPTY_RESPONSE_FALLBACK
 
     # ── TTS ───────────────────────────────────────────────────
     audio_b64: str | None = None
@@ -240,6 +342,8 @@ async def api_query(
                 latest_turn["counts"]["tts.total"] = int(latest_turn["counts"].get("tts.total", 0) + 1)
     except Exception as exc:
         logger.warning("TTS failed: %s", exc)
+        if not audio_b64:
+            response_text = _EMPTY_RESPONSE_FALLBACK if not response_text.strip() else response_text
 
     metrics_payload = {
         "turn_top": _summarize_metrics(turn_metrics.get("summary", {}), turn_metrics.get("counts", {})),
@@ -249,12 +353,30 @@ async def api_query(
         ),
     }
 
+    logger.info(
+        "api_query route=%s response_len=%s audio_b64=%s depth_b64=%s",
+        response_route,
+        len(response_text),
+        bool(audio_b64),
+        bool(depth_b64),
+    )
+
+    debug_history = _history_for_debug((_sessions.get(session_id) or {}).get("history"))
+    debug_payload = {
+        "active_image_b64": active_image_b64,
+        "depth_b64": depth_b64,
+        "navigator_image_b64": navigator_image_b64,
+        "measurements": (_sessions.get(session_id) or {}).get("measurements") or measurement_state or [],
+        "history": debug_history,
+    }
+
     return JSONResponse({
         "response": response_text,
         "route": response_route,
         "audio_b64": audio_b64,
         "depth_b64": depth_b64,
         "metrics": metrics_payload,
+        "debug": debug_payload,
     })
 
 

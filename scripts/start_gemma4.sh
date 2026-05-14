@@ -52,11 +52,11 @@ PORT="${PORT:-8000}"
 
 # Gemma 4 supports up to 128k tokens, but KV cache scales with context length.
 # For T4/shared-GPU setups, stay conservative by default.
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-4096}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
 
 # GPU memory fraction (0.0–1.0)
 # Keep this lower when Gemma shares the GPU with TIPSv2.
-GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.45}"
+GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.60}"
 
 # Tensor parallelism — set to 2+ for 31B on multi-GPU
 TENSOR_PARALLEL="${TENSOR_PARALLEL:-1}"
@@ -66,10 +66,10 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 
 # Vision token budget per image — valid values: 70 140 280 560 1120
 # Higher = more detail, more memory; lower = faster
-MAX_SOFT_TOKENS="${MAX_SOFT_TOKENS:-280}"
+MAX_SOFT_TOKENS="${MAX_SOFT_TOKENS:-560}"
 
 # Quantization mode should match the selected checkpoint or serving strategy.
-VLLM_QUANTIZATION="${VLLM_QUANTIZATION:-bitsandbytes}"
+VLLM_QUANTIZATION="${VLLM_QUANTIZATION:-fp8}"
 
 # Max images / audio per request (audio requires vllm[audio])
 MM_LIMITS='{"image": 4, "audio": 5}'

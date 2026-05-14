@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Gemma Guide</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Outfit:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/designs/gemma_guide.css" />
+</head>
+<body>
+
+<div class="intro-gate" id="intro-gate" role="dialog" aria-modal="true" aria-label="Instructions">
+  <div class="intro-card">
+    <div class="intro-title">Hear Instructions</div>
+    <div class="intro-copy" id="intro-copy">
+      Hear a short overview before permissions.
+    </div>
+    <div class="intro-actions">
+      <button
+        class="intro-btn primary"
+        id="btn-intro-continue"
+        aria-label="Hear instructions"
+        aria-describedby="intro-note"
+      >
+        <span class="intro-btn-title">Hear Instructions</span>
+        <span class="intro-btn-copy">Plays the setup instructions.</span>
+      </button>
+    </div>
+    <div class="intro-note" id="intro-note">
+      Permissions come next.
+    </div>
+  </div>
+</div>
+
+<div class="intro-gate hidden" id="permission-gate" role="dialog" aria-modal="true" aria-label="Enable audio">
+  <div class="intro-card">
+    <div class="intro-title">Enable Camera And Audio</div>
+    <div class="intro-copy">
+      Gemma Guide will request microphone and camera access on the next step.
+    </div>
+    <div class="intro-actions">
+      <button
+        class="intro-btn primary"
+        id="btn-enable-audio"
+        aria-label="Enable microphone and continue"
+        aria-describedby="permission-note"
+      >
+        <span class="intro-btn-title">Allow Microphone And Camera</span>
+        <span class="intro-btn-copy">Choose Allow on the popup.</span>
+      </button>
+    </div>
+    <div class="intro-note" id="permission-note">
+      Microphone and camera are both requested.
+    </div>
+  </div>
+</div>
+
+<div id="main">
+
+  <header class="header">
+    <div class="brand">
+      <svg class="gemma-crystal" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <defs>
+          <linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%"   stop-color="#5b9cf6"/>
+            <stop offset="100%" stop-color="#a87fff"/>
+          </linearGradient>
+        </defs>
+        <path d="M20 3 L34 11 L34 29 L20 37 L6 29 L6 11 Z"
+              stroke="url(#cg)" stroke-width="1.5" fill="rgba(91,156,246,0.06)"/>
+        <path d="M20 9 L30 15 L30 25 L20 31 L10 25 L10 15 Z"
+              stroke="url(#cg)" stroke-width="1" fill="rgba(168,127,255,0.08)"/>
+        <path d="M20 14 L26 17.5 L26 22.5 L20 26 L14 22.5 L14 17.5 Z"
+              fill="url(#cg)" opacity="0.9"/>
+      </svg>
+      <div class="brand-text">
+        <span class="brand-name">Gemma Guide</span>
+        <div class="brand-powered">
+          <span class="brand-gem-dot"></span>
+          Powered by Gemma 4
+        </div>
+      </div>
+    </div>
+    <div class="header-tools">
+      <button class="debug-chip" id="btn-debug" aria-label="Open debug view">DBG</button>
+      <div class="status-pill">
+        <span class="dot" id="dot"></span>
+        <span id="status-text">ready</span>
+      </div>
+    </div>
+  </header>
+
+  <div class="action-area">
+
+    <div class="btn-stack" id="state-no-photo">
+      <button class="btn-action btn-photo large" id="btn-photo-first" aria-label="Take Photo">
+        <div class="btn-icon-box">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </div>
+        <div class="btn-copy">
+          <span class="btn-label">Take Photo</span>
+        </div>
+      </button>
+      <button class="btn-action btn-ask large" id="btn-ask" aria-label="Ask Question">
+        <div class="btn-icon-box">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </div>
+        <div class="btn-copy">
+          <span class="btn-label">Ask Question</span>
+        </div>
+      </button>
+    </div>
+
+    <div class="btn-stack" id="state-analyzing" style="display:none" aria-live="polite" aria-label="Analyzing">
+      <div class="analyzing-card">
+        <div class="analyzing-spinner"></div>
+        <div class="analyzing-label">Analyzing your scene…</div>
+        <div class="analyzing-sub">Gemma is processing your image</div>
+        <div class="analyzing-dots"><span></span><span></span><span></span></div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<div id="camera-panel" role="dialog" aria-modal="true" aria-label="Camera preview">
+  <div class="camera-stage">
+    <video id="camera-preview" autoplay playsinline muted></video>
+    <button class="camera-capture-surface" id="btn-camera-capture-surface" aria-label="Tap anywhere to take photo"></button>
+    <div class="camera-status">
+      <div class="camera-status-pill" id="camera-status-text">Camera preview ready. Tap Take Photo to capture.</div>
+    </div>
+    <div class="camera-controls">
+      <button class="camera-btn secondary" id="btn-camera-cancel" aria-label="Cancel camera and go back">Back To Main Screen</button>
+    </div>
+  </div>
+</div>
+
+<audio id="tts-audio" style="display:none"></audio>
+
+<div id="audio-panel" role="dialog" aria-modal="true" aria-label="Playing response">
+  <div class="panel-backdrop" id="panel-backdrop"></div>
+  <div class="panel-sheet">
+    <div class="panel-handle"></div>
+    <div class="panel-top">
+      <div class="panel-title">Playing response…</div>
+      <div class="gemma-tag">◆ Gemma</div>
+    </div>
+    <div class="waveform" aria-hidden="true">
+      <span></span><span></span><span></span><span></span><span></span>
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div class="panel-controls">
+      <button class="btn-panel btn-back" id="btn-back-main">Back To Main Screen</button>
+    </div>
+  </div>
+</div>
+
+<div id="debug-panel" role="dialog" aria-modal="true" aria-label="Debug view">
+  <div class="panel-backdrop" id="debug-backdrop"></div>
+  <div class="debug-sheet">
+    <div class="panel-handle"></div>
+    <div class="debug-head">
+      <div class="debug-title">Debug View</div>
+      <button class="btn-panel btn-back" id="btn-debug-close">Close</button>
+    </div>
+    <div class="debug-scroll">
+      <section class="debug-card">
+        <h3>Current Active Image</h3>
+        <img class="debug-image" id="debug-active-image" alt="Current active image" style="display:none" />
+      </section>
+      <section class="debug-card">
+        <h3>Upscaled Depth Map</h3>
+        <img class="debug-image" id="debug-depth-image" alt="Depth map" style="display:none" />
+      </section>
+      <section class="debug-card">
+        <h3>Navigator Image</h3>
+        <img class="debug-image" id="debug-navigator-image" alt="Navigator image" style="display:none" />
+      </section>
+      <section class="debug-card">
+        <h3>Measurements</h3>
+        <div class="debug-meta" id="debug-measurements">No measurements yet.</div>
+      </section>
+      <section class="debug-card">
+        <h3>Conversation History</h3>
+        <div class="debug-history" id="debug-history">
+          <div class="debug-text">No conversation history yet.</div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<script src="/designs/gemma_guide.js" defer></script>
+
+</body>
+</html>

@@ -110,7 +110,7 @@ Conversation style:
 SYSTEM_PROMPT = os.getenv("SPATIALSENSE_SYSTEM_PROMPT", SYSTEM_PROMPT)
 
 SCOUT_SYSTEM_PROMPT = """\
-You are Scout for Gemma Guide, a visual assistant for a blind user.
+You are the user-facing assistant for Gemma Guide, a visual assistant for a blind user.
 Primary goal: answer the user's question directly when general visual understanding is enough, and hand off to the spatial navigation pipeline only when metric spatial reasoning is required.
 
 Instruction hierarchy (highest to lowest):
@@ -124,6 +124,11 @@ Safety and factuality:
 - If text is unreadable or the image is insufficient, say so briefly.
 - If the answer requires metric distance, direction, obstacle awareness, path guidance, or safe navigation, do not guess. Hand off to the navigator pipeline.
 
+Identity and presentation:
+- You are the assistant the user is speaking to. Present yourself as Gemma Guide, not as "Scout".
+- Do not mention internal agent names, internal routing, or hidden pipeline details unless the user explicitly asks how the system works.
+- If the user asks who you are or what you do, describe yourself as Gemma Guide, a blind-first visual assistant that can answer visual questions directly, use spatial analysis when navigation or grounded measurement is needed, and clear the conversation history when asked to start over or reset the scene.
+
 Routing requirements:
 1. Answer directly when the question is about identity, text, title, price, label, brand, color, simple scene description, or other general visual understanding.
 2. Choose type="handoff_navigator" when the user is asking for distance, direction, relative location, obstacle awareness, pathing, scene safety, or navigation guidance.
@@ -131,6 +136,7 @@ Routing requirements:
 4. If the user asks a mixed question, hand off whenever the spatial part is necessary for a safe or complete answer.
 5. Do not choose type="handoff_navigator" for pure reading or recognition questions.
 6. If you can answer directly, do not hand off.
+7. You will be told whether an active scene image is currently available. If no active image is available, do not choose type="handoff_navigator". Instead, answer directly and briefly ask the user to take the photo again so you can analyze the scene.
 
 Response-format requirements:
 - Return exactly one JSON object matching this schema:
@@ -165,6 +171,44 @@ SCOUT_RESPONSE_SCHEMA: dict[str, Any] = {
         },
         "required": ["type", "text", "reason"],
         "additionalProperties": False,
+        "allOf": [
+            {
+                "if": {
+                    "properties": {"type": {"const": "direct"}},
+                    "required": ["type"],
+                },
+                "then": {
+                    "properties": {
+                        "text": {"type": "string", "minLength": 1},
+                        "reason": {"type": "string"},
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {"type": {"const": "handoff_navigator"}},
+                    "required": ["type"],
+                },
+                "then": {
+                    "properties": {
+                        "text": {"type": "string", "maxLength": 0},
+                        "reason": {"type": "string", "minLength": 1},
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {"type": {"const": "restart_conversation"}},
+                    "required": ["type"],
+                },
+                "then": {
+                    "properties": {
+                        "text": {"type": "string", "minLength": 1},
+                        "reason": {"type": "string"},
+                    }
+                },
+            },
+        ],
     },
     "strict": True,
 }
@@ -247,13 +291,21 @@ D) Navigation:
 - Target's distance and direction first.
 - For each object between the user and the target (closer and roughly in the same direction): name it, give its distance and direction, say which side to step around it.
 - If no objects are in the way, say the path looks clear.
-- Step-by-step, distance-first.
+- Build a simple path plan before answering: target first, then nearest relevant obstacles or openings, then the final approach.
+- Give movement guidance as short sequential actions. Prefer explicit verbs like turn, step, veer, walk, continue, stop.
+- Anchor each movement to measured objects and measured openings whenever possible. Use those objects as landmarks for where to aim, when to pass, and when to turn.
+- Break longer guidance into segments. Say what direction to move, how far to move, what object the user is moving toward or around, and what should be true after that segment.
+- When an obstacle is in the way, explain the avoidance path in order: avoid object, pass it, then realign toward the target.
+- If the path depends on a narrow gap or open space, mention that opening as part of the route.
+- Step-by-step, distance-first. Prefer concrete movement sequences over high-level summaries.
+- If the measured scene is not sufficient for a reliable step-by-step route, say what is known, keep the guidance cautious, and do not invent a detailed path.
 
 Response examples (follow structure, do not copy verbatim):
 - "The table is 2.1 meters away, about 12 degrees to your right."
 - "I can see three chairs. The nearest is 1.4 meters away, straight ahead. I also see one at 2.3 meters to your left and one at 3.0 meters to your right. Are you asking about a specific one?"
 - "You are in a room with a clear opening slightly to your left. Several objects are spread across the center and right side. There is a chair directly ahead at about 1.8 meters — watch out for that. Would you like guidance toward the opening?"
 - "The door is 3.6 meters away, about 9 degrees to your right. There is a chair 1.4 meters ahead near center-left and a table 0.9 meters almost straight ahead. Step slightly left, walk forward about 1.2 meters, then shift right and continue about 2.4 meters to the door. Want me to guide this one step at a time?"
+- "The doorway is 4.0 meters away, slightly to your left. A chair is 1.1 meters ahead near the center and a table is 2.0 meters ahead to the right. Step left to clear the chair, walk forward about 1 meter until you are past it, then keep the table on your right and continue about 3 meters toward the doorway."
 
 Style:
 - Spoken natural language only. No markdown, no bullet points, no numbered lists.
@@ -431,11 +483,22 @@ def _parse_scout_response(text: str) -> tuple[str, str, str]:
     reason = payload.get("reason", "")
 
     if response_type == "handoff_navigator":
+        logger.info("scout route=navigator text_len=%s reason_len=%s", len(str(response_text)), len(str(reason)))
         return "navigator", "", str(reason).strip()
     if response_type == "restart_conversation":
-        return "restart", str(response_text).strip(), str(reason).strip()
+        restart_text = str(response_text).strip()
+        if not restart_text:
+            restart_text = "Starting a new scene. Please show me what is in front of you."
+            logger.warning("scout returned empty restart text; using fallback")
+        logger.info("scout route=restart text_len=%s reason_len=%s", len(restart_text), len(str(reason)))
+        return "restart", restart_text, str(reason).strip()
     if response_type == "direct":
-        return "direct", str(response_text).strip(), str(reason).strip()
+        direct_text = str(response_text).strip()
+        if not direct_text:
+            logger.warning("scout returned empty direct text; using fallback")
+            direct_text = "I understood your request, but I could not form a spoken answer. Please try asking again."
+        logger.info("scout route=direct text_len=%s reason_len=%s", len(direct_text), len(str(reason)))
+        return "direct", direct_text, str(reason).strip()
 
     logger.warning("scout returned unknown type=%r; defaulting to direct answer", response_type)
     return "direct", str(response_text or text).strip(), str(reason).strip()
@@ -577,6 +640,7 @@ def run_scout_loop(
     session: Session,
     history: list[dict] | None = None,
     send_image: bool = True,
+    has_active_image: bool = True,
 ) -> tuple[str, str, list[dict]]:
     """Run Scout: answer directly or hand off to the spatial navigator pipeline.
 
@@ -586,11 +650,18 @@ def run_scout_loop(
     client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
 
     user_content = build_turn_user_content(session.image, session.question, send_image=send_image)
+    scout_runtime_prompt = (
+        f"{SCOUT_SYSTEM_PROMPT}\n\n"
+        "Runtime state:\n"
+        f"- active_image_available: {'true' if has_active_image else 'false'}\n"
+        "- If active_image_available is false and the user is asking a spatial or navigation question, "
+        'respond with type="direct" and ask them to take the photo again.'
+    )
     if history is not None:
-        messages = [{"role": "system", "content": SCOUT_SYSTEM_PROMPT}] + history + [{"role": "user", "content": user_content}]
+        messages = [{"role": "system", "content": scout_runtime_prompt}] + history + [{"role": "user", "content": user_content}]
     else:
         messages = [
-            {"role": "system", "content": SCOUT_SYSTEM_PROMPT},
+            {"role": "system", "content": scout_runtime_prompt},
             {"role": "user", "content": user_content},
         ]
 
@@ -623,6 +694,7 @@ def run_scout_loop(
 
     choice = response.choices[0]
     raw_content = choice.message.content or ""
+    logger.info("scout raw_content_len=%s finish_reason=%s", len(raw_content), choice.finish_reason)
     route, final_text, _reason = _parse_scout_response(raw_content)
     messages.append({"role": "assistant", "content": final_text if route == "direct" else raw_content})
     return route, final_text, messages[1:]
@@ -632,6 +704,8 @@ def run_mapper_loop(
     session: Session,
     history: list[dict] | None = None,
     prior_measurements: list[dict] | None = None,
+    prior_turn_count: int = 0,
+    fresh_image_attached: bool = False,
 ) -> None:
     """Run the Mapper agent to populate session.measurements via tool calls.
 
@@ -649,6 +723,8 @@ def run_mapper_loop(
         session,
         history=history,
         prior_measurements=prior_measurements,
+        prior_turn_count=prior_turn_count,
+        fresh_image_attached=fresh_image_attached,
         send_image=True,
     )
 
@@ -697,7 +773,27 @@ def run_mapper_loop(
             messages.append({"role": "user", "content": "Use the structured tool call format, not text. Call call_dpt_head now."})
             continue
 
-        # No tool calls and no raw protocol — mapper is done
+        # No tool calls and no raw protocol. If the mapper still has not
+        # produced any measurements, it likely answered conversationally
+        # instead of using tools, so push it back onto the tool path.
+        if not session.measurements:
+            logger.warning(
+                "mapper round=%s produced prose with no measurements; requesting tool-based retry",
+                round_idx,
+            )
+            messages.append({"role": "assistant", "content": content})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Do not answer in prose yet. Use tools to create measured scene state first. "
+                        "Call call_dpt_head, then measure the target and any relevant obstacles."
+                    ),
+                }
+            )
+            continue
+
+        # Mapper is done
         logger.info(
             "mapper round=%s done: finish_reason=%s measurements=%s content=%r",
             round_idx,
@@ -729,6 +825,8 @@ def build_mapper_messages(
     session: Session,
     history: list[dict] | None = None,
     prior_measurements: list[dict] | None = None,
+    prior_turn_count: int = 0,
+    fresh_image_attached: bool = False,
     send_image: bool = True,
 ) -> list[dict]:
     user_content = build_turn_user_content(session.image, session.question, send_image=send_image)
@@ -742,7 +840,30 @@ def build_mapper_messages(
             "I am blind. Measure every object around me that could affect my navigation or safety — scan the full scene. Also specifically:"
         )
     else:
-        prefix_parts.append("Use the conversation and prior measurements to answer this follow-up safely. Also specifically:")
+        followup_notes: list[str] = [
+            "This is a follow-up request.",
+            f"There have been {prior_turn_count} prior user/assistant messages since the session started."
+            if prior_turn_count
+            else "There has been no prior user/assistant message in this session.",
+        ]
+        if fresh_image_attached:
+            followup_notes.append(
+                "A new photo is attached for this turn. Treat prior measurements as stale context only. "
+                "Measure from the current image again before relying on any prior distance."
+            )
+        else:
+            followup_notes.append(
+                "No new photo is attached for this turn. You may use prior measurements as context, "
+                "but still remeasure if the current request needs a fresh or more specific measurement."
+            )
+        followup_notes.append(
+            "Use prior measurements only as background context. Do not report an old distance as the current answer unless you remeasure it for this turn."
+        )
+        followup_notes.append(
+            "If the user is asking about the same target after moving, prefer remeasuring that target and nearby obstacles from the current image."
+        )
+        followup_notes.append("Also specifically:")
+        prefix_parts.append(" ".join(followup_notes))
 
     user_message = {
         "role": "user",

@@ -1,12 +1,21 @@
 ### Motivation
 
-For a blind user, the important question is not just what is in front of me, but how far away it is and how I should move safely. That is the gap between scene description and real navigation assistance. A useful navigation system must do more than recognize objects or describe a scene in natural language; it must produce grounded spatial answers that can guide movement in the real world.
+For a blind user, the important question is not just what is in front of me, but how far away it is and how I should move safely. That is the gap between scene description and real navigation assistance. A useful system must do more than describe a scene in natural language; it must produce grounded spatial answers that guide movement in the real world.
 
-This is where recent agentic multimodal models become interesting. On their own, language models are not reliable depth sensors, and navigation depends on measurement as much as interpretation. But with the right tools, a small multimodal model can do more than describe a scene: it can identify the relevant object, call specialized spatial tools, and turn grounded distance and direction estimates into practical guidance. Gemma Guide is built around that idea.
+I followed the previous competition and was really moved by the story behind **Gemma Vision**. Their success highlighted that for this community, a "blind-first" UX is the only way to build. I designed my system around those same core principles of extreme simplicity and audio-driven interaction, which allowed me to focus the technical heart of the project on **spatial grounding.**
+
+Language models are not reliable depth sensors, but with **Gemma 4**, they can act as an agent that identifies an object, calls specialized spatial tools, and turns grounded distance estimates into practical guidance. **Gemma Guide** is built to turn that idea into a reality.
 
 ### The Solution
 
-Gemma Guide combines Gemma 4 and TIPSv2 , a vision encoder with a DPT head, into a grounded assistive navigation system for blind and visually impaired users. Gemma 4 acts as the multimodal agent: it receives the user's spoken question and the original scene image, interprets the user's intent, localizes the relevant object, and decides when to call spatial tools. TIPSv2 provides the dense spatial grounding that language models lack on their own, producing depth and segmentation signals that let the system measure real distances and relative directions. Together, this allows Gemma Guide to move beyond scene description and provide navigation guidance that is spatially actionable in the real world.
+
+Gemma Guide combines Gemma 4 and TIPSv2 into a grounded navigation system. Rather than a standard chatbot, the solution is designed as a "grounded navigator" where **the user interface completely hides the complexity of the architecture.**
+
+- **The Intelligence (Gemma 4)**: Acts as the multimodal orchestrator. Leveraging its native audio-visual understanding, it interprets spoken intent and visual scenes simultaneously, localizing objects with high precision and deciding when to invoke the spatial tool-stack.
+
+- **The Grounding (TIPSv2)**: A vision-language encoder with a DPT head that provides the dense metric depth and semantic segmentation that traditional LLMs lack.
+
+- **The Interface**: The UI is built around spatial muscle memory, using a simplified two-zone layout and a "tap-anywhere" shutter. Distinct audio soundscapes and TTS guidance bridge the gap during model reasoning, ensuring a continuous, accessible user loop.
 
 ### Why Gemma 4
 
@@ -29,7 +38,7 @@ The key step is object-level measurement. The system does not treat Gemma's loca
 
 This design also supports open-vocabulary grounding. For objects that map cleanly to the fixed label set, the system uses the TIPSv2 DPT heads to produce semantic segmentation and metric depth. For objects outside that vocabulary, the Mapper can route the request through the TIPSv2 backbone, which produces zero-shot text-aligned similarity maps over candidate class names. The resulting matched region is then passed into the same downstream measurement pipeline for distance and direction estimation.
 
-After measurement, the system packages the grounded scene into an annotated image and a compact structured summary. A second Gemma-based agent, the `Navigator`, receives this cleaned representation and generates the final user-facing guidance. I use this split because the two stages place different demands on the model: the Mapper must manage tool calls and spatial grounding, while the Navigator is more reliable when reasoning over a simplified measured world model rather than raw intermediate tool outputs.
+After measurement, the system packages the grounded scene into an annotated image and a compact structured summary. A third Gemma-based agent, the `Navigator`, receives this cleaned representation and generates the final user-facing guidance. I use this split because the two stages place different demands on the model: the Mapper must manage tool calls and spatial grounding, while the Navigator is more reliable when reasoning over a simplified measured world model rather than raw intermediate tool outputs.
 
 ### Challenges
 
