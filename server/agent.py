@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 from PIL import Image
 
@@ -332,6 +332,147 @@ def build_turn_user_content(image: Image.Image | None, question: str | bytes, se
     return content
 
 
+def _make_request_payload(messages: list[dict], **overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": MODEL_ID,
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
+        "extra_body": {
+            "chat_template_kwargs": {"enable_thinking": True},
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _execute_model_call(
+    *,
+    client: Any,
+    session: Session,
+    request_payload: dict[str, Any],
+    round_idx: int,
+    timing_stage: str,
+    timing_meta: dict[str, Any] | None = None,
+) -> tuple[Any, float]:
+    _maybe_dump_request(round_idx, request_payload)
+
+    t0 = time.monotonic()
+    response = client.chat.completions.create(**request_payload)
+    _maybe_dump_response(round_idx, response)
+    llm_latency = time.monotonic() - t0
+    session.add_timing(timing_stage, llm_latency, **(timing_meta or {}))
+    return response, llm_latency
+
+
+def _tool_call_to_message(tc: Any) -> dict[str, Any]:
+    return {
+        "id": tc.id,
+        "type": "function",
+        "function": {
+            "name": tc.function.name,
+            "arguments": tc.function.arguments,
+        },
+    }
+
+
+def _assistant_tool_message(choice: Any) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": choice.message.content or "",
+        "tool_calls": [_tool_call_to_message(tc) for tc in choice.message.tool_calls],
+    }
+
+
+def _run_single_call_agent(
+    *,
+    session: Session,
+    messages: list[dict],
+    request_overrides: dict[str, Any],
+    llm_timing_stage: str,
+    total_timing_stage: str,
+    log_label: str,
+) -> Any:
+    t_total = time.monotonic()
+    client = create_vllm_client()
+
+    request_payload = _make_request_payload(messages, **request_overrides)
+    response, llm_latency = _execute_model_call(
+        client=client,
+        session=session,
+        request_payload=request_payload,
+        round_idx=0,
+        timing_stage=llm_timing_stage,
+    )
+    total_latency = time.monotonic() - t_total
+    session.add_timing(total_timing_stage, total_latency)
+    logger.info(
+        "%s llm_latency=%.3fs total_latency=%.3fs",
+        log_label,
+        llm_latency,
+        total_latency,
+    )
+    return response
+
+
+def _run_tool_loop_agent(
+    *,
+    session: Session,
+    messages: list[dict],
+    llm_timing_stage: str,
+    total_timing_stage: str,
+    log_label: str,
+    build_request_overrides: Callable[[int], dict[str, Any]],
+    handle_no_tool_calls: Callable[[list[dict], Any, int], tuple[bool, bool]],
+) -> int:
+    t_total = time.monotonic()
+    client = create_vllm_client()
+
+    for round_idx in range(MAX_TOOL_ROUNDS):
+        request_payload = _make_request_payload(messages, **build_request_overrides(round_idx))
+        response, llm_latency = _execute_model_call(
+            client=client,
+            session=session,
+            request_payload=request_payload,
+            round_idx=round_idx,
+            timing_stage=llm_timing_stage,
+            timing_meta={"round": round_idx},
+        )
+        logger.info("%s round=%s llm_latency=%.3fs", log_label, round_idx, llm_latency)
+
+        choice = response.choices[0]
+
+        if choice.message.tool_calls:
+            messages.append(_assistant_tool_message(choice))
+            messages.extend(_dispatch_tool_calls(choice.message.tool_calls, session))
+            continue
+
+        should_continue, is_done = handle_no_tool_calls(messages, choice, round_idx)
+        if should_continue:
+            continue
+        if is_done:
+            total_latency = time.monotonic() - t_total
+            session.add_timing(total_timing_stage, total_latency, rounds=round_idx + 1, measurements=len(session.measurements))
+            logger.info(
+                "%s total_latency=%.3fs rounds=%s measurements=%s",
+                log_label,
+                total_latency,
+                round_idx + 1,
+                len(session.measurements),
+            )
+            return round_idx + 1
+
+    total_latency = time.monotonic() - t_total
+    session.add_timing(total_timing_stage, total_latency, rounds=MAX_TOOL_ROUNDS, measurements=len(session.measurements))
+    logger.info(
+        "%s total_latency=%.3fs rounds=%s measurements=%s",
+        log_label,
+        total_latency,
+        MAX_TOOL_ROUNDS,
+        len(session.measurements),
+    )
+    return MAX_TOOL_ROUNDS
+
+
 def _dispatch_tool(name: str, args: dict[str, Any], session: Session) -> str:
     t0 = time.monotonic()
     print_tool_io = os.getenv("SPATIALSENSE_PRINT_TOOL_IO", "0") == "1" or os.getenv("SPATIALSENSE_PRINT_TOOL_RETURNS", "0") == "1"
@@ -461,9 +602,6 @@ def run_scout_loop(
 
     Returns (route, text, updated_history) where route is "direct" or "navigator".
     """
-    t_total = time.monotonic()
-    client = create_vllm_client()
-
     user_content = build_turn_user_content(session.image, session.question, send_image=send_image)
     scout_runtime_prompt = (
         f"{SCOUT_SYSTEM_PROMPT}\n\n"
@@ -480,31 +618,18 @@ def run_scout_loop(
             {"role": "user", "content": user_content},
         ]
 
-    request_payload = {
-        "model": MODEL_ID,
-        "messages": messages,
-        "max_tokens": MAX_TOKENS,
-        "response_format": {
-            "type": "json_schema",
-            "json_schema": SCOUT_RESPONSE_SCHEMA,
+    response = _run_single_call_agent(
+        session=session,
+        messages=messages,
+        request_overrides={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": SCOUT_RESPONSE_SCHEMA,
+            },
         },
-        "extra_body": {
-            "chat_template_kwargs": {"enable_thinking": True},
-        },
-    }
-    _maybe_dump_request(0, request_payload)
-
-    t0 = time.monotonic()
-    response = client.chat.completions.create(**request_payload)
-    _maybe_dump_response(0, response)
-    llm_latency = time.monotonic() - t0
-    total_latency = time.monotonic() - t_total
-    session.add_timing("scout.llm", llm_latency)
-    session.add_timing("scout.total", total_latency)
-    logger.info(
-        "scout llm_latency=%.3fs total_latency=%.3fs",
-        llm_latency,
-        total_latency,
+        llm_timing_stage="scout.llm",
+        total_timing_stage="scout.total",
+        log_label="scout",
     )
 
     choice = response.choices[0]
@@ -531,9 +656,6 @@ def run_mapper_loop(
     if session.image is None:
         return
 
-    t_total = time.monotonic()
-    client = create_vllm_client()
-
     messages = build_mapper_messages(
         session,
         history=history,
@@ -543,50 +665,20 @@ def run_mapper_loop(
         send_image=True,
     )
 
-    for round_idx in range(MAX_TOOL_ROUNDS):
-        request_payload = {
-            "model": MODEL_ID,
-            "messages": messages,
+    def _build_mapper_request_overrides(_round_idx: int) -> dict[str, Any]:
+        return {
             "tools": _active_tools(),
             "tool_choice": "auto",
             "parallel_tool_calls": True,
-            "max_tokens": MAX_TOKENS,
-            "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
         }
-        _maybe_dump_request(round_idx, request_payload)
 
-        t0 = time.monotonic()
-        response = client.chat.completions.create(**request_payload)
-        _maybe_dump_response(round_idx, response)
-        llm_latency = time.monotonic() - t0
-        session.add_timing("mapper.llm_round", llm_latency, round=round_idx)
-        logger.info("mapper round=%s llm_latency=%.3fs", round_idx, llm_latency)
-
-        choice = response.choices[0]
-
-        if choice.message.tool_calls:
-            assistant_msg = {
-                "role": "assistant",
-                "content": choice.message.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.function.name, "arguments": tc.function.arguments},
-                    }
-                    for tc in choice.message.tool_calls
-                ],
-            }
-            messages.append(assistant_msg)
-            messages.extend(_dispatch_tool_calls(choice.message.tool_calls, session))
-            continue
-
+    def _handle_mapper_no_tool_calls(messages: list[dict], choice: Any, round_idx: int) -> tuple[bool, bool]:
         content = choice.message.content or ""
         if _looks_like_raw_tool_protocol(content):
             logger.warning("mapper round=%s: raw tool protocol text, sending correction", round_idx)
             messages.append({"role": "assistant", "content": content})
             messages.append({"role": "user", "content": "Use the structured tool call format, not text. Call call_dpt_head now."})
-            continue
+            return True, False
 
         # No tool calls and no raw protocol. If the mapper still has not
         # produced any measurements, it likely answered conversationally
@@ -606,7 +698,7 @@ def run_mapper_loop(
                     ),
                 }
             )
-            continue
+            return True, False
 
         # Mapper is done
         logger.info(
@@ -616,11 +708,17 @@ def run_mapper_loop(
             len(session.measurements),
             content[:200],
         )
-        break
+        return False, True
 
-    total_latency = time.monotonic() - t_total
-    session.add_timing("mapper.total", total_latency, rounds=round_idx + 1, measurements=len(session.measurements))
-    logger.info("mapper total_latency=%.3fs rounds=%s measurements=%s", total_latency, round_idx + 1, len(session.measurements))
+    _run_tool_loop_agent(
+        session=session,
+        messages=messages,
+        llm_timing_stage="mapper.llm_round",
+        total_timing_stage="mapper.total",
+        log_label="mapper",
+        build_request_overrides=_build_mapper_request_overrides,
+        handle_no_tool_calls=_handle_mapper_no_tool_calls,
+    )
 
 
 def _build_prior_measurements_context(prior_measurements: list[dict] | None) -> str | None:
@@ -719,9 +817,6 @@ def run_navigator_loop(
     Receives the annotated image (numbered bounding boxes), a plain-text scene
     summary built from session.measurements, and the original user question.
     """
-    t_total = time.monotonic()
-    client = create_vllm_client()
-
     scene_summary = _build_scene_summary(session)
 
     is_followup = history is not None
@@ -761,25 +856,13 @@ def run_navigator_loop(
             {"role": "user", "content": question_content},
         ]
 
-    request_payload = {
-        "model": MODEL_ID,
-        "messages": messages,
-        "max_tokens": MAX_TOKENS,
-        "extra_body": {"chat_template_kwargs": {"enable_thinking": True}},
-    }
-    _maybe_dump_request(0, request_payload)
-
-    t0 = time.monotonic()
-    response = client.chat.completions.create(**request_payload)
-    _maybe_dump_response(0, response)
-    llm_latency = time.monotonic() - t0
-    total_latency = time.monotonic() - t_total
-    session.add_timing("navigator.llm", llm_latency)
-    session.add_timing("navigator.total", total_latency)
-    logger.info(
-        "navigator llm_latency=%.3fs total_latency=%.3fs",
-        llm_latency,
-        total_latency,
+    response = _run_single_call_agent(
+        session=session,
+        messages=messages,
+        request_overrides={},
+        llm_timing_stage="navigator.llm",
+        total_timing_stage="navigator.total",
+        log_label="navigator",
     )
 
     final_text = response.choices[0].message.content or ""

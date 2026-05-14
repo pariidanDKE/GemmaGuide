@@ -111,6 +111,63 @@ def _merge_metrics(existing: dict | None, turn_metrics: dict) -> dict:
     return merged
 
 
+def _add_metric_sample(metrics: dict, stage: str, seconds: float, *, include_timing: bool = True) -> None:
+    seconds_rounded = round(float(seconds), 3)
+    if include_timing:
+        metrics.setdefault("timings", []).append({"stage": stage, "seconds": seconds_rounded})
+    summary = metrics.setdefault("summary", {})
+    counts = metrics.setdefault("counts", {})
+    summary[stage] = round(float(summary.get(stage, 0.0)) + seconds_rounded, 3)
+    counts[stage] = int(counts.get(stage, 0) + 1)
+
+
+def _finalize_turn_metrics(session_metrics_state: dict | None, turn_metrics: dict, request_t0: float) -> dict:
+    _add_metric_sample(turn_metrics, "request.total", time.monotonic() - request_t0)
+    return _merge_metrics(session_metrics_state, turn_metrics)
+
+
+def _record_tts_metrics(turn_metrics: dict, session_metrics_state: dict | None, tts_seconds: float) -> None:
+    _add_metric_sample(turn_metrics, "tts.total", tts_seconds)
+    if session_metrics_state is not None:
+        _add_metric_sample(session_metrics_state, "tts.total", tts_seconds, include_timing=False)
+        if session_metrics_state.get("turns"):
+            latest_turn = session_metrics_state["turns"][-1]
+            _add_metric_sample(latest_turn, "tts.total", tts_seconds, include_timing=False)
+
+
+def _persist_session_state(
+    session_id: str,
+    *,
+    history: list[dict],
+    measurements: list[dict] | None,
+    image: Image.Image | None,
+    metrics: dict,
+) -> None:
+    if not session_id:
+        return
+    _sessions[session_id] = {
+        "history": history,
+        "measurements": measurements,
+        "image": image,
+        "metrics": metrics,
+    }
+
+
+def _append_turn_to_history(
+    history: list[dict],
+    *,
+    active_image: Image.Image | None,
+    question: str | bytes,
+    send_image: bool,
+    response_text: str,
+) -> list[dict]:
+    updated_history = list(history)
+    turn_user_content = build_turn_user_content(active_image, question, send_image=send_image)
+    updated_history.append({"role": "user", "content": turn_user_content})
+    updated_history.append({"role": "assistant", "content": response_text})
+    return updated_history
+
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/blind", response_class=HTMLResponse)
 async def blind_ui():
@@ -205,22 +262,20 @@ async def api_query(
                 next_image = None
                 next_history = list(shared_history or [])
                 scout_session.release()
-                total_request_seconds = time.monotonic() - request_t0
-                turn_metrics["timings"].append({"stage": "request.total", "seconds": round(total_request_seconds, 3)})
-                turn_metrics["summary"]["request.total"] = round(total_request_seconds, 3)
-                turn_metrics["counts"]["request.total"] = 1
-                session_metrics_state = _merge_metrics(session_metrics_state, turn_metrics)
-                if session_id:
-                    updated_shared_history = next_history
-                    turn_user_content = build_turn_user_content(active_image, question, send_image=send_image)
-                    updated_shared_history.append({"role": "user", "content": turn_user_content})
-                    updated_shared_history.append({"role": "assistant", "content": response_text})
-                    _sessions[session_id] = {
-                        "history": updated_shared_history,
-                        "measurements": measurement_state,
-                        "image": next_image,
-                        "metrics": session_metrics_state,
-                    }
+                session_metrics_state = _finalize_turn_metrics(session_metrics_state, turn_metrics, request_t0)
+                _persist_session_state(
+                    session_id,
+                    history=_append_turn_to_history(
+                        next_history,
+                        active_image=active_image,
+                        question=question,
+                        send_image=send_image,
+                        response_text=response_text,
+                    ),
+                    measurements=measurement_state,
+                    image=next_image,
+                    metrics=session_metrics_state,
+                )
                 raise StopIteration
 
             session = create_session(
@@ -281,24 +336,24 @@ async def api_query(
                 next_history = list(shared_history or [])
 
         scout_session.release()
-        total_request_seconds = time.monotonic() - request_t0
-        turn_metrics["timings"].append({"stage": "request.total", "seconds": round(total_request_seconds, 3)})
-        turn_metrics["summary"]["request.total"] = round(total_request_seconds, 3)
-        turn_metrics["counts"]["request.total"] = 1
-        session_metrics_state = _merge_metrics(session_metrics_state, turn_metrics)
+        session_metrics_state = _finalize_turn_metrics(session_metrics_state, turn_metrics, request_t0)
 
-        if session_id:
-            updated_shared_history = next_history
-            if route != "restart":
-                turn_user_content = build_turn_user_content(active_image, question, send_image=send_image)
-                updated_shared_history.append({"role": "user", "content": turn_user_content})
-                updated_shared_history.append({"role": "assistant", "content": response_text})
-            _sessions[session_id] = {
-                "history": updated_shared_history,
-                "measurements": measurement_state,
-                "image": next_image,
-                "metrics": session_metrics_state,
-            }
+        updated_shared_history = list(next_history)
+        if route != "restart":
+            updated_shared_history = _append_turn_to_history(
+                updated_shared_history,
+                active_image=active_image,
+                question=question,
+                send_image=send_image,
+                response_text=response_text,
+            )
+        _persist_session_state(
+            session_id,
+            history=updated_shared_history,
+            measurements=measurement_state,
+            image=next_image,
+            metrics=session_metrics_state,
+        )
 
     except ConnectionRefusedError:
         response_text = (
@@ -322,16 +377,7 @@ async def api_query(
         tts_bytes = synthesize(strip_markdown(response_text))
         audio_b64 = base64.b64encode(tts_bytes).decode()
         tts_seconds = round(time.monotonic() - tts_t0, 3)
-        turn_metrics["timings"].append({"stage": "tts.total", "seconds": tts_seconds})
-        turn_metrics["summary"]["tts.total"] = round(float(turn_metrics["summary"].get("tts.total", 0.0)) + tts_seconds, 3)
-        turn_metrics["counts"]["tts.total"] = int(turn_metrics["counts"].get("tts.total", 0) + 1)
-        if session_metrics_state is not None:
-            session_metrics_state["summary"]["tts.total"] = round(float(session_metrics_state["summary"].get("tts.total", 0.0)) + tts_seconds, 3)
-            session_metrics_state["counts"]["tts.total"] = int(session_metrics_state["counts"].get("tts.total", 0) + 1)
-            if session_metrics_state.get("turns"):
-                latest_turn = session_metrics_state["turns"][-1]
-                latest_turn["summary"]["tts.total"] = round(float(latest_turn["summary"].get("tts.total", 0.0)) + tts_seconds, 3)
-                latest_turn["counts"]["tts.total"] = int(latest_turn["counts"].get("tts.total", 0) + 1)
+        _record_tts_metrics(turn_metrics, session_metrics_state, tts_seconds)
     except Exception as exc:
         logger.warning("TTS failed: %s", exc)
         if not audio_b64:
