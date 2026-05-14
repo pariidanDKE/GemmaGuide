@@ -8,12 +8,9 @@ import re
 import time
 from pathlib import Path
 
-from openai import OpenAI
 from PIL import Image, ImageDraw
 
-
-VLLM_BASE_URL = "http://localhost:8000/v1"
-VLLM_API_KEY = "EMPTY"
+from server.runtime import create_vllm_client
 MODEL_ID = "gemma-4-e2b-it"
 
 
@@ -123,7 +120,7 @@ def main() -> None:
             }
         )
 
-    client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
+    client = create_vllm_client()
     response = client.chat.completions.create(
         model=args.model,
         messages=messages,

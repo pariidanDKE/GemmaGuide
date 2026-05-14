@@ -2,7 +2,7 @@
 Text-to-speech synthesis for SpatialSense.
 
 Default provider: gTTS (no API key required).
-Fallback: Whisper-based STT is handled upstream in app.py, not here.
+Fallback: Whisper-based STT is handled upstream in the app layer, not here.
   Set AUDIO_FALLBACK=whisper in your environment and install openai-whisper
   if direct audio-to-Gemma fails on vLLM — see quickstart.md Known Issues.
 """

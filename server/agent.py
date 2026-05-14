@@ -10,17 +10,15 @@ import re
 import time
 from typing import Any
 
-from openai import OpenAI
 from PIL import Image
 
 from pipeline.session import Session
 from pipeline import tools as pipeline_tools
+from server.runtime import create_vllm_client
 from server.schemas import TOOL_SCHEMAS
 
 logger = logging.getLogger(__name__)
 
-VLLM_BASE_URL = "http://localhost:8000/v1"
-VLLM_API_KEY = "EMPTY"
 MODEL_ID = os.getenv("VLLM_MODEL_ID", "gemma-4-e4b-it")
 MAX_TOOL_ROUNDS = 10
 MAX_TOKENS = 1024
@@ -28,86 +26,6 @@ DUMP_REQUEST_PATH = os.getenv("SPATIALSENSE_DUMP_REQUEST_PATH", "")
 DUMP_RESPONSE_PATH = os.getenv("SPATIALSENSE_DUMP_RESPONSE_PATH", "")
 TOOL_MODE = os.getenv("SPATIALSENSE_TOOL_MODE", "full").strip().lower()
 GEMMA_IMAGE_MULTIPLE = 48
-
-SYSTEM_PROMPT = """\
-You are SpatialSense, a navigation assistant for a blind user.
-Primary goal: provide safe, actionable guidance using the current image and tool results.
-
-Instruction hierarchy (highest to lowest):
-1) Safety and factuality
-2) Tool-use requirements
-3) Response-format requirements
-4) Conversation style
-
-Safety and factuality:
-- Never invent objects, distances, or directions.
-- Never state a numeric distance unless measure_object returned distance_m for that instance.
-- If an object is visible but unmeasured, say it is visible but unmeasured.
-
-Tool-use requirements:
-1. For object distance/location questions, numeric distance is valid only after a successful measure_object call.
-2. call_dpt_head and call_encoder_zero_shot prepare detections only; by themselves they do not provide distance.
-3. In-vocabulary path: call_dpt_head first, then measure_object for each requested instance.
-4. Out-of-vocabulary/fallback path: use search_seg_classes; if there is no useful ADE match, or if the requested class is not in detected_classes and no close ADE label is reasonable, call call_encoder_zero_shot, then measure_object.
-5. After call_dpt_head, treat detected_classes as the preferred ADE labels for measurement.
-6. If user wording and ADE label differ, only allow near-synonym substitutions (for example chair vs armchair). Never substitute semantically unrelated labels (for example fire extinguisher -> painting).
-7. In multi-instance questions, do not stop after one instance; measure up to 4 clearly visible instances with separate boxes.
-8. Prefer parallel measure_object calls for multi-instance cases.
-9. If measure_object indicates class mismatch/substitution or returns error, do not report distance for the requested object. Retry with a tighter box or use search_seg_classes/call_encoder_zero_shot.
-10. For scene description questions (intent C), you MUST call call_dpt_head and then call measure_object for every navigation-relevant detected class (skip wall, floor, ceiling, sky) before generating the scene summary. Do not describe the scene from the image alone.
-
-Direction and reporting rules:
-- measure_object returns direction text. Use that direction phrase verbatim.
-- If multiple relevant instances are visible, explicitly say there are multiple instances.
-
-Response format requirements by intent:
-
-A) Direct object distance question (example: "How far is the chair?")
-- Single clear instance:
-    "<object> is <distance_m> meters away, <direction>."
-- Multiple instances:
-    "I can see <N> <object_plural>. Nearest is <distance_m>, <direction>. I also see <brief summary of others>. Are you asking about a specific one?"
-
-B) Location/direction question
-- Give direction first, then distance if measured.
-- If distance is unavailable:
-    "<object> is visible <direction>, but I could not measure distance reliably."
-
-C) Scene question (example: "What is around me?")
-- Describe the scene in concise, practical terms (layout, main nearby objects, pathway/opening cues).
-- Flag the closest objects straight ahead as potential hazards.
-- Include one optional next-step question.
-- Keep concise and navigation-first.
-
-D) Navigation question (example: "How do I get there?")
-- First identify and measure the destination object instance using measure_object.
-- Then call measure_object on any objects that appear between the user and the destination.
-- Provide practical step-by-step guidance: for each closer object in roughly the same direction, state its distance and direction, then tell the user which side to step around it before continuing toward the destination.
-- If destination is ambiguous or not visible, ask one clarifying question and provide the safest immediate next step.
-
-Behavior examples (follow structure, do not copy verbatim):
-- User: "How far is the table?"
-    Assistant: "The table is 2.1 meters away, about 12 degrees to your right."
-- User: "How far is the chair?" (multiple chairs visible)
-    Assistant: "I can see three chairs. The nearest chair is 1.4 meters away, straight ahead. I also see one at 2.3 meters to your left and one at 3.0 meters to your right. Are you asking about one near another object?"
-- User: "What is around me?"
-    Assistant: "You are in a room with a clear opening slightly left and several objects spread across the center and right side. Safety cue: there is a chair directly ahead at about 1.8 meters — obstacle. Would you like step-by-step guidance toward the opening?"
-- User: "How do I get there?"
-    Assistant: "The door is 3.6 meters away, about 9 degrees to your right. There is a chair 1.4 meters ahead near center-left and a small obstacle 0.9 meters almost straight ahead. Path: shift about half a step left, walk forward 1.2 meters, then turn slightly right and continue about 2.4 meters to the door. If you want, I can guide this one step at a time."
-
-Tool-call examples (illustrative few-shot flow):
-- User: "What is around me?"
-    Assistant tool flow: call_dpt_head -> measure_object on up to 5 navigation-relevant classes (including near-forward hazards) -> final scene summary with explicit close-front safety cue.
-- User: "How do I get to the door?"
-    Assistant tool flow: call_dpt_head -> measure_object(door) + measure_object on any objects between user and door -> final distance-aware path guidance.
-- User: "How do I get to the shopping cart?" (OOV class)
-    Assistant tool flow: search_seg_classes("shopping cart") -> call_encoder_zero_shot(["shopping cart"]) -> measure_object("shopping cart", box_2d) -> measure_object(intervening obstacles) -> final distance-aware path guidance.
-
-Conversation style:
-- Friendly, calm, concise, and practical.
-- Natural language only; never output raw tool JSON.
-"""
-SYSTEM_PROMPT = os.getenv("SPATIALSENSE_SYSTEM_PROMPT", SYSTEM_PROMPT)
 
 SCOUT_SYSTEM_PROMPT = """\
 You are the user-facing assistant for Gemma Guide, a visual assistant for a blind user.
@@ -414,13 +332,6 @@ def build_turn_user_content(image: Image.Image | None, question: str | bytes, se
     return content
 
 
-def build_messages(image: Image.Image | None, question: str | bytes) -> list[dict]:
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": build_turn_user_content(image, question)},
-    ]
-
-
 def _dispatch_tool(name: str, args: dict[str, Any], session: Session) -> str:
     t0 = time.monotonic()
     print_tool_io = os.getenv("SPATIALSENSE_PRINT_TOOL_IO", "0") == "1" or os.getenv("SPATIALSENSE_PRINT_TOOL_RETURNS", "0") == "1"
@@ -540,102 +451,6 @@ def _dispatch_tool_calls(
     ]
 
 
-def run_agent_loop(
-    session: Session,
-    history: list[dict] | None = None,
-    send_image: bool = True,
-) -> tuple[str, list[dict]]:
-    t_total = time.monotonic()
-    client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
-
-    has_image = session.image is not None
-
-    if history is not None:
-        if send_image and has_image:
-            image_url = _image_to_data_url(session.image)
-            user_content = [{"type": "image_url", "image_url": {"url": image_url}}, *_build_question_content(session.question)]
-        else:
-            user_content = _build_question_content(session.question)
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history + [{"role": "user", "content": user_content}]
-    else:
-        messages = build_messages(session.image, session.question)
-
-    for round_idx in range(MAX_TOOL_ROUNDS):
-        tools = _active_tools() if has_image else None
-        request_payload: dict[str, Any] = {
-            "model": MODEL_ID,
-            "messages": messages,
-            "parallel_tool_calls": True,
-            "max_tokens": MAX_TOKENS,
-            "extra_body": {
-                "chat_template_kwargs": {
-                    "enable_thinking": True,
-                }
-            },
-        }
-        if tools:
-            request_payload["tools"] = tools
-            request_payload["tool_choice"] = "auto"
-        _maybe_dump_request(round_idx, request_payload)
-
-        t0 = time.monotonic()
-        response = client.chat.completions.create(
-            **request_payload,
-        )
-        _maybe_dump_response(round_idx, response)
-        llm_latency = time.monotonic() - t0
-        session.add_timing("agent_loop.llm_round", llm_latency, round=round_idx)
-        logger.info("round=%s llm_latency=%.3fs", round_idx, llm_latency)
-
-        choice = response.choices[0]
-
-        if choice.message.tool_calls:
-            assistant_msg = {
-                "role": "assistant",
-                "content": choice.message.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in choice.message.tool_calls
-                ],
-            }
-            messages.append(assistant_msg)
-
-            tool_messages = _dispatch_tool_calls(
-                choice.message.tool_calls,
-                session,
-            )
-            messages.extend(tool_messages)
-            continue
-
-        content = choice.message.content or ""
-        if _looks_like_raw_tool_protocol(content):
-            logger.warning("Model emitted raw tool-call protocol text instead of structured tool_calls")
-            err = "You emitted the wrong format for the tool call. Please retry."
-            return err, messages[1:]
-
-        # Final text response
-        final_text = content
-        session.spatial_report = final_text
-        messages.append({"role": "assistant", "content": final_text})
-        total_latency = time.monotonic() - t_total
-        session.add_timing("agent_loop.total", total_latency, rounds=round_idx + 1)
-        logger.info("agent_loop_total_latency=%.3fs rounds=%s", total_latency, round_idx + 1)
-        return final_text, messages[1:]
-
-    err = "I was unable to complete the spatial analysis. Please try again."
-    total_latency = time.monotonic() - t_total
-    session.add_timing("agent_loop.total", total_latency, rounds=MAX_TOOL_ROUNDS)
-    logger.info("agent_loop_total_latency=%.3fs rounds=%s", total_latency, MAX_TOOL_ROUNDS)
-    return err, messages[1:]
-
-
 def run_scout_loop(
     session: Session,
     history: list[dict] | None = None,
@@ -647,7 +462,7 @@ def run_scout_loop(
     Returns (route, text, updated_history) where route is "direct" or "navigator".
     """
     t_total = time.monotonic()
-    client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
+    client = create_vllm_client()
 
     user_content = build_turn_user_content(session.image, session.question, send_image=send_image)
     scout_runtime_prompt = (
@@ -717,7 +532,7 @@ def run_mapper_loop(
         return
 
     t_total = time.monotonic()
-    client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
+    client = create_vllm_client()
 
     messages = build_mapper_messages(
         session,
@@ -905,7 +720,7 @@ def run_navigator_loop(
     summary built from session.measurements, and the original user question.
     """
     t_total = time.monotonic()
-    client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
+    client = create_vllm_client()
 
     scene_summary = _build_scene_summary(session)
 

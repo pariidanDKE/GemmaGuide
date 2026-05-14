@@ -5,7 +5,6 @@ import base64
 import io
 import logging
 import os
-import re
 import time
 
 from fastapi import FastAPI, File, Form, UploadFile
@@ -17,6 +16,7 @@ from pydub import AudioSegment
 
 from pipeline.session import create_session
 from pipeline.tts import synthesize
+from server.runtime import patch_httpx_localhost_verify, strip_markdown
 from server.agent import build_turn_user_content, run_mapper_loop, run_navigator_loop, run_scout_loop
 from pipeline.tools import render_annotated_image
 
@@ -80,14 +80,6 @@ def _history_for_debug(history: list[dict] | None) -> list[dict]:
             preview = str(content)
         debug_items.append({"role": role, "text": preview})
     return debug_items
-
-
-def _strip_markdown(text: str) -> str:
-    text = re.sub(r"\*{1,3}(.*?)\*{1,3}", r"\1", text)
-    text = re.sub(r"#{1,6}\s*", "", text)
-    text = re.sub(r"`{1,3}.*?`{1,3}", "", text, flags=re.DOTALL)
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-    return text.strip()
 
 
 def _summarize_metrics(summary: dict[str, float], counts: dict[str, int], limit: int = 10) -> list[dict]:
@@ -327,7 +319,7 @@ async def api_query(
     audio_b64: str | None = None
     try:
         tts_t0 = time.monotonic()
-        tts_bytes = synthesize(_strip_markdown(response_text))
+        tts_bytes = synthesize(strip_markdown(response_text))
         audio_b64 = base64.b64encode(tts_bytes).decode()
         tts_seconds = round(time.monotonic() - tts_t0, 3)
         turn_metrics["timings"].append({"stage": "tts.total", "seconds": tts_seconds})
@@ -386,19 +378,6 @@ async def clear_session(session_id: str):
     return {"ok": True}
 
 
-def _patch_httpx_localhost_verify() -> None:
-    import httpx
-
-    orig_get = httpx.get
-
-    def _httpx_no_verify_localhost(url, **kwargs):
-        if isinstance(url, str) and any(h in url for h in ("localhost", "127.0.0.1", "0.0.0.0")):
-            kwargs["verify"] = False
-        return orig_get(url, **kwargs)
-
-    httpx.get = _httpx_no_verify_localhost
-
-
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -439,5 +418,5 @@ def _run_server() -> None:
 
 
 if __name__ == "__main__":
-    _patch_httpx_localhost_verify()
+    patch_httpx_localhost_verify()
     _run_server()
