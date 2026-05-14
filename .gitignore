@@ -1,5 +1,6 @@
 # my git ignore:
 data/
+!data/ade20k/objectInfo150.csv
 notebooks/unsloth_compiled_cache
 .claude/
 .specify/
