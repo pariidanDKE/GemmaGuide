@@ -553,7 +553,8 @@
       color: var(--ink-soft);
     }
     .intro-actions {
-      display: contents;
+      display: grid;
+      gap: 0.75rem;
     }
     .intro-btn {
       width: 100%;
@@ -597,7 +598,30 @@
 </head>
 <body>
 
-<div class="intro-gate" id="intro-gate" role="dialog" aria-modal="true" aria-label="Enable audio">
+<div class="intro-gate" id="intro-gate" role="dialog" aria-modal="true" aria-label="Instructions">
+  <div class="intro-card">
+    <div class="intro-title">Hear Instructions</div>
+    <div class="intro-copy" id="intro-copy">
+      Tap the button below to hear how Gemma Guide works before continuing to microphone setup.
+    </div>
+    <div class="intro-actions">
+      <button
+        class="intro-btn primary"
+        id="btn-intro-continue"
+        aria-label="Hear instructions"
+        aria-describedby="intro-note"
+      >
+        <span class="intro-btn-title">Hear Instructions</span>
+        <span class="intro-btn-copy">Gemma Guide will explain how to use the screen. After that, you will continue to microphone setup.</span>
+      </button>
+    </div>
+    <div class="intro-note" id="intro-note">
+      This step only plays the instructions. Microphone permission comes next.
+    </div>
+  </div>
+</div>
+
+<div class="intro-gate hidden" id="permission-gate" role="dialog" aria-modal="true" aria-label="Enable audio">
   <div class="intro-card">
     <div class="intro-title">Enable Voice And Audio</div>
     <div class="intro-copy">
@@ -608,14 +632,14 @@
         class="intro-btn primary"
         id="btn-enable-audio"
         aria-label="Enable microphone and continue"
-        aria-describedby="intro-note"
+        aria-describedby="permission-note"
       >
-        <span class="intro-btn-title">Tap Anywhere To Continue</span>
-        <span class="intro-btn-copy">After you tap, your phone may show a microphone permission popup. Choose Allow to use voice questions and hear Gemma Guide clearly.</span>
+        <span class="intro-btn-title">Allow Microphone And Continue</span>
+        <span class="intro-btn-copy">Your phone may show a microphone permission popup. Choose Allow to use voice questions and hear Gemma Guide clearly.</span>
       </button>
     </div>
-    <div class="intro-note" id="intro-note">
-      After audio is enabled, Gemma Guide will read a short welcome instruction and open the main screen.
+    <div class="intro-note" id="permission-note">
+      After audio is enabled, Gemma Guide will move to the next screen.
     </div>
   </div>
 </div>
@@ -782,6 +806,10 @@
   const audioPanel       = document.getElementById("audio-panel");
   const panelRespTxt     = document.getElementById("panel-response-text");
   const introGate        = document.getElementById("intro-gate");
+  const permissionGate   = document.getElementById("permission-gate");
+  const introCopy        = document.getElementById("intro-copy");
+  const introNote        = document.getElementById("intro-note");
+  const btnIntroContinue = document.getElementById("btn-intro-continue");
   const btnEnableAudio   = document.getElementById("btn-enable-audio");
   const responseCollapse = document.getElementById("response-collapsible");
   const collapsibleBtn   = document.getElementById("collapsible-btn");
@@ -804,20 +832,25 @@
   let currentImageFile = null;
   let _prevState       = null;   // which state div was showing before analyzing
   let _welcomePlayed   = false;
+  let _introExplained  = false;
   let sessionId = localStorage.getItem("ss_sid") || crypto.randomUUID();
   localStorage.setItem("ss_sid", sessionId);
+  const WELCOME_TEXT = "Welcome to Gemma Guide. First press the button to allow microphone, then click Allow on the popup. After that, there is a top part of the screen to take a photo, and then after photo also click on the top part to ask a question.";
+  const INTRO_GUIDE_TEXT = "Welcome to Gemma Guide. First press the button to allow microphone, then click Allow on the popup. After that, there is a top part of the screen to take a photo, and then after photo also click on the top part to ask a question.";
 
   const cueAudio = {
-    dictationStart: new Audio("/designs/audio/dictation_start.mp3"),
+    dictationStart: new Audio("/designs/audio/misc_audio/mic_start_trimmed_cut.mp3"),
     dictationStop:  new Audio("/designs/audio/dictation_stop.mp3"),
     woosh:          new Audio("/designs/audio/woosh.mp3"),
-    loading:        new Audio("/designs/audio/loading.mp3"),
+    loading:        new Audio("/designs/audio/misc_audio/model_load.mp3"),
+    imageStart:     new Audio("/designs/audio/misc_audio/image_start_trimmed.mp3"),
   };
   cueAudio.loading.loop = true;
   cueAudio.loading.volume = 0.35;
   cueAudio.woosh.volume = 0.9;
   cueAudio.dictationStart.volume = 0.9;
   cueAudio.dictationStop.volume = 0.9;
+  cueAudio.imageStart.volume = 0.9;
 
   // ── iOS audio unlock ─────────────────────────────────────────
   // Play a silent sound on first user touch so subsequent .play() calls work.
@@ -836,14 +869,73 @@
   }
 
   // ── Helpers ──────────────────────────────────────────────────
-  function speakAnnouncement(text) {
+  function primeSpeechSynthesis() {
     if (!("speechSynthesis" in window)) return;
-    window.speechSynthesis.cancel();
+    try {
+      const primer = new SpeechSynthesisUtterance(" ");
+      primer.volume = 0;
+      primer.rate = 1.0;
+      primer.pitch = 1.0;
+      primer.onstart = () => console.log("[audio] speech primer start");
+      primer.onend = () => console.log("[audio] speech primer end");
+      window.speechSynthesis.speak(primer);
+    } catch (err) {
+      console.warn("[audio] speech primer failed", err);
+    }
+  }
+
+  function explainIntroAndRevealMic() {
+    if (_introExplained) return;
+    _introExplained = true;
+    btnIntroContinue.disabled = true;
+    window.setTimeout(() => speakAnnouncement(INTRO_GUIDE_TEXT), 60);
+    window.setTimeout(() => {
+      introGate.classList.add("hidden");
+      permissionGate.classList.remove("hidden");
+      btnEnableAudio.focus();
+    }, 120);
+  }
+
+  function speakAnnouncement(text, { interrupt = true } = {}) {
+    if (!("speechSynthesis" in window)) return;
+    console.log("[audio] speakAnnouncement", { text, interrupt });
+    if (interrupt) window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.0;
     utterance.pitch = 1.0;
     utterance.volume = 1.0;
+    utterance.onstart = () => console.log("[audio] speech start", { text });
+    utterance.onend = () => console.log("[audio] speech end", { text });
+    utterance.onerror = (event) => console.warn("[audio] speech error", { text, event });
     window.speechSynthesis.speak(utterance);
+  }
+
+  function speakAnnouncementAsync(text, { interrupt = true } = {}) {
+    if (!("speechSynthesis" in window)) return Promise.resolve();
+    console.log("[audio] speakAnnouncementAsync", { text, interrupt });
+    if (interrupt) window.speechSynthesis.cancel();
+    return new Promise((resolve) => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      utterance.onstart = () => console.log("[audio] speech start", { text });
+      utterance.onend = () => {
+        console.log("[audio] speech end", { text });
+        finish();
+      };
+      utterance.onerror = (event) => {
+        console.warn("[audio] speech error", { text, event });
+        finish();
+      };
+      window.speechSynthesis.speak(utterance);
+    });
   }
 
   function playCue(name) {
@@ -893,21 +985,27 @@
     introGate.classList.add("hidden");
   }
 
+  function dismissPermissionGate() {
+    permissionGate.classList.add("hidden");
+  }
+
   async function enableAudioAndEnter() {
     setStatus("enabling audio…", true);
+    primeSpeechSynthesis();
     await _unlockAudio();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach(track => track.stop());
+      resetConversationState();
       setStatus("audio ready", true);
     } catch (err) {
       console.warn("Microphone access not granted:", err);
       setStatus("mic denied", false);
     }
-    dismissIntroGate();
+    dismissPermissionGate();
     if (!_welcomePlayed) {
       _welcomePlayed = true;
-      speakAnnouncement("Welcome to Gemma Guide. Press the top half of the screen to take a photo. Press the bottom half to ask a question.");
+      window.setTimeout(() => speakAnnouncement(WELCOME_TEXT), 60);
     }
   }
 
@@ -957,6 +1055,7 @@
 
   // ── Camera ───────────────────────────────────────────────────
   function triggerCamera() {
+    playCue("imageStart");
     cameraInput.value = "";
     cameraInput.click();
   }
@@ -969,7 +1068,7 @@
     sessionId = crypto.randomUUID();
     localStorage.setItem("ss_sid", sessionId);
     setStatus("photo taken", true);
-    speakAnnouncement("Photo taken. You can now ask a question.");
+    speakAnnouncement("Photo taken. You can now ask a question.", { interrupt: false });
     transitionToHasPhoto();
   });
 
@@ -1021,10 +1120,13 @@
   // ── Submit ───────────────────────────────────────────────────
   async function submitQuery(withImage) {
     showAnalyzing();
+    const sendText = audioChunks.length > 0
+      ? (withImage ? "Sending audio with photo." : "Sending audio only.")
+      : (withImage ? "Sending text with photo." : "Sending text only.");
     if (audioChunks.length > 0) {
-      speakAnnouncement(withImage ? "Sending audio with photo." : "Sending audio only.");
+      await speakAnnouncementAsync(sendText, { interrupt: false });
     } else {
-      speakAnnouncement(withImage ? "Sending text with photo." : "Sending text only.");
+      await speakAnnouncementAsync(sendText, { interrupt: false });
     }
     playCue("woosh");
     startLoadingCue();
@@ -1073,7 +1175,6 @@
         depthImg.src = `data:image/jpeg;base64,${data.depth_b64}`;
         depthImg.style.display = "block";
       }
-
       stopLoadingCue();
       hideAnalyzing();
       openAudioPanel();
@@ -1150,6 +1251,7 @@
 
   ttsAudio.addEventListener("ended", () => setStatus("ready"));
 
+  btnIntroContinue.addEventListener("click", explainIntroAndRevealMic);
   btnEnableAudio.addEventListener("click", enableAudioAndEnter);
 </script>
 

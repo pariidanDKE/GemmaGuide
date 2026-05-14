@@ -74,7 +74,7 @@ VLLM_QUANTIZATION="${VLLM_QUANTIZATION:-bitsandbytes}"
 # Max images / audio per request (audio requires vllm[audio])
 MM_LIMITS='{"image": 4, "audio": 5}'
 
-# ============================================================================
+# ============================================= `   `===============================
 # Start vLLM Server (foreground — Ctrl+C to stop)
 # ============================================================================
 echo "Starting Gemma 4 server: $MODEL on port $PORT"

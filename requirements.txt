@@ -13,4 +13,5 @@ numpy==2.3.5
 pillow==12.2.0
 matplotlib==3.10.9
 openai==2.33.0
+bitsandbytes>=0.48.1
 pytest
