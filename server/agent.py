@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import concurrent.futures
-import io
 import json
 import logging
 import os
@@ -14,6 +13,8 @@ from PIL import Image
 
 from pipeline.session import Session
 from pipeline import tools as pipeline_tools
+from server.media import image_to_data_url
+from server.messages import build_question_content, build_turn_user_content
 from server.runtime import create_vllm_client
 from server.schemas import TOOL_SCHEMAS
 
@@ -292,44 +293,6 @@ def _active_tools() -> list[dict[str, Any]]:
             if schema.get("function", {}).get("name") == "call_dpt_head"
         ]
     return TOOL_SCHEMAS
-
-
-def _resize_for_gemma(image: Image.Image, multiple: int) -> Image.Image:
-    """Resize image so both dimensions are multiples of `multiple`."""
-    if multiple <= 1:
-        return image
-
-    w, h = image.size
-    new_w = max(multiple, int(round(w / multiple) * multiple))
-    new_h = max(multiple, int(round(h / multiple) * multiple))
-
-    if new_w == w and new_h == h:
-        return image
-
-    return image.resize((new_w, new_h), Image.BILINEAR)
-
-
-def _image_to_data_url(image: Image.Image) -> str:
-    gemma_image = _resize_for_gemma(image, GEMMA_IMAGE_MULTIPLE)
-    buf = io.BytesIO()
-    gemma_image.save(buf, format="JPEG", quality=90)
-    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:image/jpeg;base64,{b64}"
-
-
-def _build_question_content(question: str | bytes) -> list[dict]:
-    if isinstance(question, bytes):
-        b64_audio = base64.b64encode(question).decode("utf-8")
-        return [{"type": "input_audio", "input_audio": {"data": b64_audio, "format": "wav"}}]
-    return [{"type": "text", "text": question}]
-
-
-def build_turn_user_content(image: Image.Image | None, question: str | bytes, send_image: bool = True) -> list[dict]:
-    content: list[dict] = []
-    if send_image and image is not None:
-        content.append({"type": "image_url", "image_url": {"url": _image_to_data_url(image)}})
-    content.extend(_build_question_content(question))
-    return content
 
 
 def _make_request_payload(messages: list[dict], **overrides: Any) -> dict[str, Any]:
@@ -822,7 +785,7 @@ def run_navigator_loop(
     is_followup = history is not None
     image_part: list[dict] = []
     if send_image:
-        image_url = _image_to_data_url(annotated_image)
+        image_url = image_to_data_url(annotated_image, multiple=GEMMA_IMAGE_MULTIPLE)
         image_part = [{"type": "image_url", "image_url": {"url": image_url}}]
 
     ref = "the image and the measurements" if send_image else "the measurements"
@@ -841,7 +804,7 @@ def run_navigator_loop(
         *image_part,
         {"type": "text", "text": scene_summary},
         {"type": "text", "text": framing},
-        *_build_question_content(session.question),
+        *build_question_content(session.question),
     ]
 
     if history is not None:
