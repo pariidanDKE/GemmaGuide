@@ -373,35 +373,6 @@
       backdrop-filter: blur(10px);
       -webkit-backdrop-filter: blur(10px);
     }
-    .camera-controls {
-      position: absolute;
-      left: 1rem;
-      right: 1rem;
-      bottom: max(1rem, env(safe-area-inset-bottom));
-      display: grid;
-      gap: 0.85rem;
-      z-index: 2;
-    }
-    .camera-btn {
-      border: none;
-      border-radius: 22px;
-      min-height: 88px;
-      padding: 1rem 1.2rem;
-      font-family: "Outfit", sans-serif;
-      font-weight: 700;
-      font-size: 1.05rem;
-      color: #fff;
-      cursor: pointer;
-      -webkit-tap-highlight-color: transparent;
-      box-shadow: 0 16px 40px rgba(0,0,0,0.38);
-    }
-    .camera-btn.primary { background: var(--photo-grad); }
-    .camera-btn.secondary {
-      background: rgba(255,255,255,0.08);
-      border: 1px solid rgba(255,255,255,0.14);
-      color: var(--ink);
-    }
-
     /* ── AUDIO PANEL ───────────────────────────────────────── */
     #audio-panel {
       position: fixed; inset: 0; z-index: 100;

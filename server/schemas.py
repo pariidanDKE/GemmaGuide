@@ -81,6 +81,7 @@ TOOL_SCHEMAS: list[dict] = [
                 "you want to measure, then pass those coordinates here. "
                 "The box is used to select which instance you mean — the depth is computed only from "
                 "the object's own pixels within that box, not from background or other objects inside the box. "
+                "If the response contains class_substituted=true, the distance belongs to a different class than requested — do NOT report it as the distance for the requested object; retry with a tighter bounding box or call search_seg_classes/call_encoder_zero_shot. "
                 "If you receive error with class_pixels_total=0 or selected_pixels=0, retry once with a closer class label from detected_classes."
             ),
             "parameters": {

@@ -234,10 +234,59 @@ def save_measurement_debug_overlay(
         return None
 
 
+def _blend_global_measurement_overlay(base: Image.Image, measurements: list[dict], alpha: float = 0.32) -> Image.Image:
+    if not measurements:
+        return base
+
+    base_rgb = base.convert("RGB")
+    base_np = np.array(base_rgb, dtype=np.uint8)
+    overlay_np = base_np.copy()
+    any_mask = np.zeros((base_np.shape[0], base_np.shape[1]), dtype=bool)
+
+    for i, measurement in enumerate(measurements):
+        mask_dpt = measurement.get("mask_dpt")
+        if mask_dpt is None:
+            continue
+        try:
+            mask_np = mask_dpt.detach().cpu().numpy().astype(np.uint8) * 255
+        except Exception:
+            continue
+        mask_img = Image.fromarray(mask_np, mode="L")
+        if mask_img.size != base_rgb.size:
+            mask_img = mask_img.resize(base_rgb.size, resample=Image.NEAREST)
+        mask_bool = np.array(mask_img, dtype=np.uint8) > 0
+        if not mask_bool.any():
+            continue
+        color = np.array(_BOX_COLORS[i % len(_BOX_COLORS)], dtype=np.uint8)
+        overlay_np[mask_bool] = color
+        any_mask |= mask_bool
+
+    if not any_mask.any():
+        return base_rgb
+
+    blended_np = base_np.copy()
+    blended_np[any_mask] = (
+        (1.0 - alpha) * base_np[any_mask].astype(np.float32)
+        + alpha * overlay_np[any_mask].astype(np.float32)
+    ).astype(np.uint8)
+    return Image.fromarray(blended_np, mode="RGB")
+
+
+def _direction_abbr(direction: str) -> str:
+    if direction == "straight ahead":
+        return "↑"
+    import re as _re
+    m = _re.search(r"(\d+)\s+degrees?\s+to\s+your\s+(left|right)", direction)
+    if m:
+        side = "R" if m.group(2) == "right" else "L"
+        return f"{m.group(1)}°{side}"
+    return direction
+
+
 def render_annotated_image(session: Session) -> Image.Image:
     from PIL import ImageFont
 
-    img = session.image.copy().convert("RGB")
+    img = _blend_global_measurement_overlay(session.image.copy(), session.measurements)
     draw = ImageDraw.Draw(img)
     W, H = img.size
     font_size = max(16, int(min(W, H) * 0.018))
@@ -256,7 +305,15 @@ def render_annotated_image(session: Session) -> Image.Image:
         ymin, xmin, ymax, xmax = m["box_original"]
         color = _BOX_COLORS[i % len(_BOX_COLORS)]
         draw.rectangle((xmin, ymin, xmax, ymax), outline=color, width=box_thickness)
-        label = str(i + 1)
+        requested_class_name = m.get("requested_class_name")
+        class_name = m.get("class_name", "object")
+        if requested_class_name and requested_class_name != class_name:
+            class_label = f"{requested_class_name}/{class_name}"
+        else:
+            class_label = str(requested_class_name or class_name)
+        dist = m.get("tips_distance_m", "?")
+        direction_abbr = _direction_abbr(m.get("direction", ""))
+        label = f"{i + 1}: {class_label} {dist}m {direction_abbr}"
         try:
             bbox = draw.textbbox((xmin + pad, ymin + pad), label, font=font)
             draw.rectangle((bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad), fill=(0, 0, 0))

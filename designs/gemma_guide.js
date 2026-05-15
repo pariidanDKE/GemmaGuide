@@ -19,7 +19,6 @@
   const cameraPreview    = document.getElementById("camera-preview");
   const cameraStatusText = document.getElementById("camera-status-text");
   const btnCameraCaptureSurface = document.getElementById("btn-camera-capture-surface");
-  const btnCameraCancel  = document.getElementById("btn-camera-cancel");
   const ttsAudio         = document.getElementById("tts-audio");
   const debugActiveImage = document.getElementById("debug-active-image");
   const debugDepthImage  = document.getElementById("debug-depth-image");
@@ -419,7 +418,6 @@
     }
     isCapturingPhoto = true;
     btnCameraCaptureSurface.disabled = true;
-    btnCameraCancel.disabled = true;
     cameraStatusText.textContent = "Capturing photo…";
     const canvas = document.createElement("canvas");
     canvas.width = cameraPreview.videoWidth;
@@ -428,7 +426,6 @@
     if (!ctx) {
       isCapturingPhoto = false;
       btnCameraCaptureSurface.disabled = false;
-      btnCameraCancel.disabled = false;
       speakAnnouncement("I could not capture the photo. Please try again.");
       return;
     }
@@ -437,7 +434,6 @@
     if (!blob || !blob.size) {
       isCapturingPhoto = false;
       btnCameraCaptureSurface.disabled = false;
-      btnCameraCancel.disabled = false;
       cameraStatusText.textContent = "Photo capture failed.";
       speakAnnouncement("I could not capture the photo. Please try again.");
       return;
@@ -455,7 +451,6 @@
     stopCameraPreview();
     isCapturingPhoto = false;
     btnCameraCaptureSurface.disabled = false;
-    btnCameraCancel.disabled = false;
     setStatus("photo taken", true);
     speakAnnouncement("Photo taken. You can now ask a question.", { interrupt: false });
     transitionToHasPhoto();
@@ -521,11 +516,15 @@
       speakAnnouncement("Please wait. I am still capturing the photo.");
       return;
     }
+    const attachImage = withImage && !!currentImageFile;
+    if (withImage && !attachImage) {
+      console.log("[query] no current image available; submitting audio/text only", { sessionId });
+    }
     showAnalyzing();
     stopAnnouncements();
     const sendText = audioChunks.length > 0
-      ? (withImage ? "Sending audio with photo." : "Sending audio only.")
-      : (withImage ? "Sending text with photo." : "Sending text only.");
+      ? (attachImage ? "Sending audio with photo." : "Sending audio only.")
+      : (attachImage ? "Sending text with photo." : "Sending text only.");
     await speakAnnouncementAsync(sendText);
     playCue("woosh");
     startLoadingCue();
@@ -533,7 +532,7 @@
     const fd = new FormData();
     fd.append("session_id", sessionId);
 
-    if (withImage && currentImageFile) {
+    if (attachImage && currentImageFile) {
       console.log("[query] attaching image", {
         sessionId,
         name: currentImageFile.name,
@@ -602,10 +601,6 @@
   btnCameraCaptureSurface.addEventListener("click", () => {
     hapticTap([14, 18, 14]);
     captureCameraFrame();
-  });
-  btnCameraCancel.addEventListener("click", () => {
-    hapticTap();
-    stopCameraPreview();
   });
 
   // ── Audio panel ──────────────────────────────────────────────

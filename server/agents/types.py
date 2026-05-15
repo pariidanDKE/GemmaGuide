@@ -84,12 +84,20 @@ class ScoutAgent(SingleCallAgent):
         history: list[dict] | None = None,
         send_image: bool = True,
         has_active_image: bool = True,
+        image_source: str = "none",
     ) -> list[dict]:
         user_content = build_turn_user_content(self.session.image, self.session.question, send_image=send_image)
+        image_source_note = {
+            "fresh": "A fresh image is attached with this request.",
+            "cached": "No new image was uploaded for this request. The currently attached image is the cached image from the previous session state and is still likely the image the user is referring to unless they clearly indicate otherwise.",
+            "none": "No active image is available for this request.",
+        }.get(image_source, "Image source is unknown.")
         runtime_prompt = (
             f"{self.system_prompt}\n\n"
             "Runtime state:\n"
             f"- active_image_available: {'true' if has_active_image else 'false'}\n"
+            f"- image_source: {image_source}\n"
+            f"- {image_source_note}\n"
             "- If active_image_available is false and the user is asking a spatial or navigation question, "
             'respond with type="direct" and ask them to take the photo again.'
         )
@@ -106,8 +114,14 @@ class ScoutAgent(SingleCallAgent):
         history: list[dict] | None = None,
         send_image: bool = True,
         has_active_image: bool = True,
+        image_source: str = "none",
     ) -> tuple[str, str, list[dict]]:
-        messages = self.build_messages(history=history, send_image=send_image, has_active_image=has_active_image)
+        messages = self.build_messages(
+            history=history,
+            send_image=send_image,
+            has_active_image=has_active_image,
+            image_source=image_source,
+        )
         response = self.run_single_call(
             messages=messages,
             request_overrides={
@@ -191,6 +205,7 @@ class MapperAgent(ToolLoopAgent):
         prior_measurements: list[dict] | None = None,
         prior_turn_count: int = 0,
         fresh_image_attached: bool = False,
+        image_source: str = "none",
         send_image: bool = True,
     ) -> list[dict]:
         user_content = build_turn_user_content(self.session.image, self.session.question, send_image=send_image)
@@ -214,6 +229,11 @@ class MapperAgent(ToolLoopAgent):
                 followup_notes.append(
                     "A new photo is attached for this turn. Treat prior measurements as stale context only. "
                     "Measure from the current image again before relying on any prior distance."
+                )
+            elif image_source == "cached":
+                followup_notes.append(
+                    "No new photo is attached for this turn, but the active image provided with this request is the cached image from the previous session state. "
+                    "The user is likely still referring to that image unless they clearly indicate a different scene."
                 )
             else:
                 followup_notes.append(
@@ -244,6 +264,7 @@ class MapperAgent(ToolLoopAgent):
         prior_measurements: list[dict] | None = None,
         prior_turn_count: int = 0,
         fresh_image_attached: bool = False,
+        image_source: str = "none",
     ) -> None:
         if self.session.image is None:
             return
@@ -252,6 +273,7 @@ class MapperAgent(ToolLoopAgent):
             prior_measurements=prior_measurements,
             prior_turn_count=prior_turn_count,
             fresh_image_attached=fresh_image_attached,
+            image_source=image_source,
             send_image=True,
         )
         self.run_tool_loop(messages)
@@ -281,19 +303,30 @@ class NavigatorAgent(SingleCallAgent):
         self,
         *,
         annotated_image: Image.Image | None,
+        original_image: Image.Image | None = None,
         history: list[dict] | None = None,
         send_image: bool = True,
+        image_source: str = "none",
     ) -> list[dict]:
         scene_summary = self.build_scene_summary()
         is_followup = history is not None
         image_part: list[dict] = []
         if send_image:
-            image_url = image_to_data_url(annotated_image, multiple=GEMMA_IMAGE_MULTIPLE)
-            image_part = [{"type": "image_url", "image_url": {"url": image_url}}]
+            if original_image is not None:
+                orig_url = image_to_data_url(original_image, multiple=GEMMA_IMAGE_MULTIPLE)
+                image_part.append({"type": "image_url", "image_url": {"url": orig_url}})
+            ann_url = image_to_data_url(annotated_image, multiple=GEMMA_IMAGE_MULTIPLE)
+            image_part.append({"type": "image_url", "image_url": {"url": ann_url}})
 
-        ref = "the image and the measurements" if send_image else "the measurements"
+        ref = "both images and the measurements" if (send_image and original_image is not None) else ("the image and the measurements" if send_image else "the measurements")
         if is_followup:
-            framing = f"Using {ref}, answer my follow-up question: "
+            if image_source == "cached":
+                framing = (
+                    "The attached image is the cached image from the previous session state and is still likely the scene the user is referring to. "
+                    f"Using {ref}, answer my follow-up question: "
+                )
+            else:
+                framing = f"Using {ref}, answer my follow-up question: "
         else:
             framing = (
                 "I am blind and navigating this space. "
@@ -321,11 +354,19 @@ class NavigatorAgent(SingleCallAgent):
         self,
         *,
         annotated_image: Image.Image | None,
+        original_image: Image.Image | None = None,
         history: list[dict] | None = None,
         send_image: bool = True,
+        image_source: str = "none",
     ) -> tuple[str, list[dict]]:
-        messages = self.build_messages(annotated_image=annotated_image, history=history, send_image=send_image)
-        response = self.run_single_call(messages=messages)
+        messages = self.build_messages(
+            annotated_image=annotated_image,
+            original_image=original_image,
+            history=history,
+            send_image=send_image,
+            image_source=image_source,
+        )
+        response = self.run_single_call(messages=messages, request_overrides={"max_tokens": 2048})
         final_text = response.choices[0].message.content or ""
         self.session.spatial_report = final_text
         messages.append({"role": "assistant", "content": final_text})

@@ -170,13 +170,23 @@ def compute_measurement(session: Session, class_name: str, box_2d: list[int]) ->
 
     response: dict = {"class_name": used_class_name, "distance_m": round(distance_m, 3), "direction": direction}
     if class_substituted:
+        response["class_substituted"] = True
+        response["requested_class_name"] = class_name
+        if box_top_classes:
+            response["box_top_classes"] = box_top_classes
         if requested_class_in_box_pixels is not None and requested_class_in_box_pixels > 0:
             response["note"] = (
                 f"Only {requested_class_in_box_pixels} pixel(s) of '{class_name}' found in box "
-                f"(threshold {_MIN_CLASS_PIXELS_IN_BOX}) — used dominant class '{used_class_name}' instead."
+                f"(threshold {_MIN_CLASS_PIXELS_IN_BOX}) — used dominant class '{used_class_name}' instead. "
+                "Do NOT use this distance for the requested object. "
+                "Check box_top_classes and retry measure_object with the correct class label and a tighter box."
             )
         else:
-            response["note"] = f"'{class_name}' not found in box — used dominant class '{used_class_name}' instead."
+            response["note"] = (
+                f"'{class_name}' not found in box — used dominant class '{used_class_name}' instead. "
+                "Do NOT use this distance for the requested object. "
+                "Check box_top_classes and retry measure_object with the correct class label and a tighter box."
+            )
 
     measurement_entry = {
         "class_name": used_class_name,

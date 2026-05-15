@@ -48,21 +48,43 @@ class AppOrchestrator:
     def clear_session(self, session_id: str) -> None:
         self._session_store.delete(session_id)
 
-    def handle_query(self, query: QueryInput) -> QueryResult:
-        context = self.load_context(query.session_id)
-        active_image = query.uploaded_image if query.uploaded_image is not None else context.cached_image
-        prior_turn_count = len(context.history or [])
-        logger.info(
-            "api_query session_id=%s uploaded_image=%s cached_image=%s active_image=%s history=%s prior_measurements=%s",
-            query.session_id or "<empty>",
-            query.uploaded_image is not None,
-            context.cached_image is not None,
-            active_image is not None,
-            context.history is not None,
-            context.prior_measurements is not None,
+    @staticmethod
+    def _is_empty_context(context: SessionContext) -> bool:
+        return (
+            context.history is None
+            and context.prior_measurements is None
+            and context.cached_image is None
+            and context.metrics is None
         )
 
-        send_image = active_image is not None and (context.history is None or query.uploaded_image is not None)
+    def handle_query(self, query: QueryInput) -> QueryResult:
+        effective_session_id = query.session_id
+        context = self.load_context(effective_session_id)
+        if self._is_empty_context(context) and query.uploaded_image is None:
+            fallback_session_id, fallback_state = self._session_store.get_latest()
+            if (
+                fallback_session_id
+                and fallback_state is not None
+                and fallback_state.image is not None
+            ):
+                effective_session_id = fallback_session_id
+                context = SessionContext(
+                    history=fallback_state.history,
+                    prior_measurements=fallback_state.measurements,
+                    cached_image=fallback_state.image,
+                    metrics=fallback_state.metrics,
+                )
+        active_image = query.uploaded_image if query.uploaded_image is not None else context.cached_image
+        image_source = (
+            "fresh"
+            if query.uploaded_image is not None
+            else "cached"
+            if context.cached_image is not None
+            else "none"
+        )
+        prior_turn_count = len(context.history or [])
+        send_image = active_image is not None
+        persist_image_in_history = query.uploaded_image is not None
 
         response_text = ""
         depth_b64: str | None = None
@@ -81,6 +103,7 @@ class AppOrchestrator:
                 history=context.history,
                 send_image=send_image,
                 has_active_image=active_image is not None,
+                image_source=image_source,
             )
             response_route = route
 
@@ -98,9 +121,11 @@ class AppOrchestrator:
                 ) = self._run_navigation_pipeline(
                     scout_session=scout_session,
                     query=query,
+                    session_id=effective_session_id,
                     context=context,
                     active_image=active_image,
                     send_image=send_image,
+                    image_source=image_source,
                     prior_turn_count=prior_turn_count,
                 )
             else:
@@ -125,8 +150,9 @@ class AppOrchestrator:
             )
             return self._finalize_result(
                 query=query,
+                session_id=effective_session_id,
                 active_image=active_image,
-                send_image=send_image,
+                send_image=persist_image_in_history,
                 response_text=response_text,
                 response_route=response_route,
                 turn_metrics=turn_metrics,
@@ -174,15 +200,17 @@ class AppOrchestrator:
         *,
         scout_session: Any,
         query: QueryInput,
+        session_id: str,
         context: SessionContext,
         active_image: Image.Image | None,
         send_image: bool,
+        image_source: str,
         prior_turn_count: int,
     ) -> tuple[str, str, dict[str, Any], str | None, str | None, str | None, list[dict] | None, Image.Image | None, list[dict]]:
         if active_image is None:
             logger.warning(
                 "scout requested navigator without active image; forcing direct retry message session_id=%s",
-                query.session_id or "<empty>",
+                session_id or "<empty>",
             )
             response_text = _MISSING_IMAGE_SPATIAL_FALLBACK
             turn_metrics = scout_session.export_metrics()
@@ -212,6 +240,7 @@ class AppOrchestrator:
             prior_measurements=context.prior_measurements,
             prior_turn_count=prior_turn_count,
             fresh_image_attached=query.uploaded_image is not None,
+            image_source=image_source,
         )
         annotated = render_annotated_image(session)
 
@@ -224,8 +253,10 @@ class AppOrchestrator:
         response_text, _nav_trace = run_navigator_loop(
             session,
             annotated_image=annotated,
+            original_image=active_image,
             history=context.history,
             send_image=send_image,
+            image_source=image_source,
         )
         turn_metrics = session.export_metrics()
         session.release()
@@ -293,6 +324,7 @@ class AppOrchestrator:
         self,
         *,
         query: QueryInput,
+        session_id: str,
         active_image: Image.Image | None,
         send_image: bool,
         response_text: str,
@@ -318,7 +350,7 @@ class AppOrchestrator:
                 response_text=response_text,
             )
         self.persist_session_state(
-            query.session_id,
+            session_id,
             history=updated_shared_history,
             measurements=measurement_state,
             image=next_image,
