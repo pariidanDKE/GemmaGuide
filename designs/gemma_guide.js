@@ -558,7 +558,6 @@
       console.log("[query] response", {
         route: data.route,
         responseLength: (data.response || "").length,
-        hasAudio: Boolean(data.audio_b64),
         hasDepth: Boolean(data.depth_b64),
       });
       renderDebugPanel(data.debug || null);
