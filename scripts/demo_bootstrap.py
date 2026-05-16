@@ -73,6 +73,24 @@ def _tail_text(path: Path, max_chars: int = 4000) -> str:
     return text[-max_chars:]
 
 
+def _emit(message: str) -> None:
+    print(message, flush=True)
+
+
+def _read_new_text(path: Path, offset: int) -> tuple[str, int]:
+    if not path.exists():
+        return "", offset
+    with path.open("r", encoding="utf-8", errors="ignore") as handle:
+        handle.seek(offset)
+        text = handle.read()
+        return text, handle.tell()
+
+
+def _emit_log_chunk(service_name: str, text: str) -> None:
+    for line in text.splitlines():
+        _emit(f"[{service_name}] {line}")
+
+
 def _wait_for_url(
     url: str,
     *,
@@ -82,9 +100,17 @@ def _wait_for_url(
     pid: int | None = None,
     service_name: str | None = None,
     log_path: Path | None = None,
+    verbose: bool = False,
 ) -> None:
     deadline = time.time() + timeout_s
+    started_at = time.time()
+    last_status_at = 0.0
+    log_offset = 0
     while time.time() < deadline:
+        if verbose and log_path:
+            new_text, log_offset = _read_new_text(log_path, log_offset)
+            if new_text:
+                _emit_log_chunk(service_name or "service", new_text)
         if pid is not None and not _is_alive(pid):
             details = f"{service_name or 'service'} exited before becoming ready"
             if log_path:
@@ -96,10 +122,23 @@ def _wait_for_url(
             with urllib.request.urlopen(url, timeout=5) as resp:
                 status = getattr(resp, "status", None) or resp.getcode()
                 if accept_status is None or status in accept_status:
+                    if verbose and log_path:
+                        new_text, log_offset = _read_new_text(log_path, log_offset)
+                        if new_text:
+                            _emit_log_chunk(service_name or "service", new_text)
                     return
         except Exception:
             pass
+        now = time.time()
+        if now - last_status_at >= 10.0:
+            elapsed = int(now - started_at)
+            _emit(f"Waiting for {service_name or url} ({elapsed}s elapsed)...")
+            last_status_at = now
         time.sleep(interval_s)
+    if verbose and log_path:
+        new_text, log_offset = _read_new_text(log_path, log_offset)
+        if new_text:
+            _emit_log_chunk(service_name or "service", new_text)
     details = f"Timed out waiting for {url}"
     if log_path:
         log_tail = _tail_text(log_path)
@@ -187,13 +226,33 @@ def _ensure_not_running(state_path: Path) -> None:
         )
 
 
-def _parse_tunnel_url(log_path: Path, timeout_s: float) -> str:
+def _parse_tunnel_url(log_path: Path, timeout_s: float, *, verbose: bool = False) -> str:
     deadline = time.time() + timeout_s
+    started_at = time.time()
+    last_status_at = 0.0
+    log_offset = 0
     while time.time() < deadline:
+        if verbose:
+            new_text, log_offset = _read_new_text(log_path, log_offset)
+            if new_text:
+                _emit_log_chunk("cloudflared", new_text)
         match = PUBLIC_URL_RE.search(_tail_text(log_path, max_chars=12000))
         if match:
+            if verbose:
+                new_text, log_offset = _read_new_text(log_path, log_offset)
+                if new_text:
+                    _emit_log_chunk("cloudflared", new_text)
             return match.group(0)
+        now = time.time()
+        if now - last_status_at >= 10.0:
+            elapsed = int(now - started_at)
+            _emit(f"Waiting for cloudflared public URL ({elapsed}s elapsed)...")
+            last_status_at = now
         time.sleep(1.0)
+    if verbose:
+        new_text, log_offset = _read_new_text(log_path, log_offset)
+        if new_text:
+            _emit_log_chunk("cloudflared", new_text)
     raise TimeoutError("Timed out waiting for cloudflared to print a public URL")
 
 
@@ -223,6 +282,7 @@ def _build_parser() -> argparse.ArgumentParser:
     start.add_argument("--vllm-timeout", type=float, default=900.0)
     start.add_argument("--app-timeout", type=float, default=180.0)
     start.add_argument("--tunnel-timeout", type=float, default=120.0)
+    start.add_argument("--verbose", action="store_true", help="Print startup progress and stream new log lines while waiting.")
 
     subparsers.add_parser("status", help="Print current service status as JSON.")
     subparsers.add_parser("stop", help="Stop any services recorded in the state file.")
@@ -307,15 +367,18 @@ def _start(args: argparse.Namespace) -> int:
 
     launched: list[int] = []
     try:
+        _emit(f"Starting vllm with model {args.model} on port {args.vllm_port}...")
         vllm_pid = _spawn_process(
             cmd=["bash", "scripts/start_gemma4.sh"],
             env=vllm_env,
             cwd=repo_root,
             log_path=vllm_log,
         )
+        _emit(f"vllm pid={vllm_pid}; log={vllm_log}")
         launched.append(vllm_pid)
         state["services"]["vllm"] = {"pid": vllm_pid, "log_path": str(vllm_log)}
         _write_state(state_path, state)
+        _emit(f"Waiting for vllm health at {state['urls']['vllm_health']}")
         _wait_for_url(
             state["urls"]["vllm_health"],
             timeout_s=args.vllm_timeout,
@@ -324,17 +387,22 @@ def _start(args: argparse.Namespace) -> int:
             pid=vllm_pid,
             service_name="vllm",
             log_path=vllm_log,
+            verbose=args.verbose,
         )
+        _emit("vllm is ready")
 
+        _emit(f"Starting app on {args.app_host}:{args.app_port}...")
         app_pid = _spawn_process(
             cmd=[sys.executable, "app.py"],
             env=app_env,
             cwd=repo_root,
             log_path=app_log,
         )
+        _emit(f"app pid={app_pid}; log={app_log}")
         launched.append(app_pid)
         state["services"]["app"] = {"pid": app_pid, "log_path": str(app_log)}
         _write_state(state_path, state)
+        _emit(f"Waiting for app health at {state['urls']['app_local']}")
         _wait_for_url(
             state["urls"]["app_local"],
             timeout_s=args.app_timeout,
@@ -343,9 +411,12 @@ def _start(args: argparse.Namespace) -> int:
             pid=app_pid,
             service_name="app",
             log_path=app_log,
+            verbose=args.verbose,
         )
+        _emit("app is ready")
 
         if args.with_tunnel:
+            _emit("Starting cloudflared tunnel...")
             _download_cloudflared(cloudflared_path)
             tunnel_pid = _spawn_process(
                 cmd=[str(cloudflared_path), "tunnel", "--url", state["urls"]["app_local"]],
@@ -353,12 +424,15 @@ def _start(args: argparse.Namespace) -> int:
                 cwd=repo_root,
                 log_path=tunnel_log,
             )
+            _emit(f"cloudflared pid={tunnel_pid}; log={tunnel_log}")
             launched.append(tunnel_pid)
             state["services"]["cloudflared"] = {"pid": tunnel_pid, "log_path": str(tunnel_log)}
             _write_state(state_path, state)
-            state["urls"]["public"] = _parse_tunnel_url(tunnel_log, args.tunnel_timeout)
+            state["urls"]["public"] = _parse_tunnel_url(tunnel_log, args.tunnel_timeout, verbose=args.verbose)
             _write_state(state_path, state)
+            _emit(f"cloudflared public URL: {state['urls']['public']}")
 
+        _emit("Startup complete")
         print(json.dumps(_status_payload(state_path), indent=2, sort_keys=True))
         return 0
     except Exception:
