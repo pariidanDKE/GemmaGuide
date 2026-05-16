@@ -279,6 +279,7 @@ def _build_parser() -> argparse.ArgumentParser:
     start.add_argument("--max-soft-tokens", default=os.getenv("MAX_SOFT_TOKENS", "560"))
     start.add_argument("--tips-short-side", default=os.getenv("SPATIALSENSE_TIPSV2_SHORT_SIDE", "672"))
     start.add_argument("--vllm-extra-args", default=os.getenv("VLLM_EXTRA_ARGS", ""))
+    start.add_argument("--dtype", default=os.getenv("VLLM_DTYPE", ""))
     start.add_argument("--vllm-timeout", type=float, default=900.0)
     start.add_argument("--app-timeout", type=float, default=180.0)
     start.add_argument("--tunnel-timeout", type=float, default=120.0)
@@ -320,6 +321,7 @@ def _start(args: argparse.Namespace) -> int:
             "max_soft_tokens": args.max_soft_tokens,
             "tips_short_side": args.tips_short_side,
             "vllm_extra_args": args.vllm_extra_args,
+            "dtype": args.dtype,
             "with_tunnel": args.with_tunnel,
         },
         "services": {},
@@ -345,6 +347,7 @@ def _start(args: argparse.Namespace) -> int:
             "TENSOR_PARALLEL": str(args.tensor_parallel),
             "MAX_SOFT_TOKENS": str(args.max_soft_tokens),
             "VLLM_EXTRA_ARGS": args.vllm_extra_args,
+            "VLLM_DTYPE": args.dtype,
         }
     )
     if "VLLM_BIN" not in vllm_env:

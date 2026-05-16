@@ -41,6 +41,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 MAX_SOFT_TOKENS="${MAX_SOFT_TOKENS:-560}"
 VLLM_QUANTIZATION="${VLLM_QUANTIZATION:-fp8}"
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
+VLLM_DTYPE="${VLLM_DTYPE:-}"
 MM_LIMITS='{"image": 4, "audio": 5}'
 
 CMD=(
@@ -67,6 +68,10 @@ case "${VLLM_QUANTIZATION,,}" in
     ;;
 esac
 
+if [ -n "$VLLM_DTYPE" ]; then
+  CMD+=(--dtype "$VLLM_DTYPE")
+fi
+
 if [ -n "$VLLM_EXTRA_ARGS" ]; then
   # shellcheck disable=SC2206
   EXTRA_ARGS=( $VLLM_EXTRA_ARGS )
@@ -77,6 +82,7 @@ echo "Starting Gemma 4 server: $MODEL on port $PORT"
 echo "Using vllm binary: $VENV_VLLM"
 echo "Memory profile: gpu_mem_util=$GPU_MEM_UTIL max_model_len=$MAX_MODEL_LEN max_num_seqs=$MAX_NUM_SEQS max_soft_tokens=$MAX_SOFT_TOKENS"
 echo "Quantization: ${VLLM_QUANTIZATION:-<unset>}"
+echo "dtype: ${VLLM_DTYPE:-<default>}"
 echo "Extra args: ${VLLM_EXTRA_ARGS:-<none>}"
 
 exec "${CMD[@]}"
