@@ -79,9 +79,19 @@ def _wait_for_url(
     timeout_s: float,
     interval_s: float,
     accept_status: set[int] | None = None,
+    pid: int | None = None,
+    service_name: str | None = None,
+    log_path: Path | None = None,
 ) -> None:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
+        if pid is not None and not _is_alive(pid):
+            details = f"{service_name or 'service'} exited before becoming ready"
+            if log_path:
+                log_tail = _tail_text(log_path)
+                if log_tail:
+                    details += f". Log tail from {log_path}:\n{log_tail}"
+            raise RuntimeError(details)
         try:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 status = getattr(resp, "status", None) or resp.getcode()
@@ -90,7 +100,12 @@ def _wait_for_url(
         except Exception:
             pass
         time.sleep(interval_s)
-    raise TimeoutError(f"Timed out waiting for {url}")
+    details = f"Timed out waiting for {url}"
+    if log_path:
+        log_tail = _tail_text(log_path)
+        if log_tail:
+            details += f". Log tail from {log_path}:\n{log_tail}"
+    raise TimeoutError(details)
 
 
 def _download_file(url: str, dest: Path) -> None:
@@ -301,7 +316,15 @@ def _start(args: argparse.Namespace) -> int:
         launched.append(vllm_pid)
         state["services"]["vllm"] = {"pid": vllm_pid, "log_path": str(vllm_log)}
         _write_state(state_path, state)
-        _wait_for_url(state["urls"]["vllm_health"], timeout_s=args.vllm_timeout, interval_s=5.0, accept_status={200})
+        _wait_for_url(
+            state["urls"]["vllm_health"],
+            timeout_s=args.vllm_timeout,
+            interval_s=5.0,
+            accept_status={200},
+            pid=vllm_pid,
+            service_name="vllm",
+            log_path=vllm_log,
+        )
 
         app_pid = _spawn_process(
             cmd=[sys.executable, "app.py"],
@@ -312,7 +335,15 @@ def _start(args: argparse.Namespace) -> int:
         launched.append(app_pid)
         state["services"]["app"] = {"pid": app_pid, "log_path": str(app_log)}
         _write_state(state_path, state)
-        _wait_for_url(state["urls"]["app_local"], timeout_s=args.app_timeout, interval_s=2.0, accept_status={200})
+        _wait_for_url(
+            state["urls"]["app_local"],
+            timeout_s=args.app_timeout,
+            interval_s=2.0,
+            accept_status={200},
+            pid=app_pid,
+            service_name="app",
+            log_path=app_log,
+        )
 
         if args.with_tunnel:
             _download_cloudflared(cloudflared_path)

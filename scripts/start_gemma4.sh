@@ -54,7 +54,7 @@ CMD=(
   --tool-call-parser gemma4
   --enable-auto-tool-choice
   --reasoning-parser gemma4
-  --mm-processor-kwargs "{"max_soft_tokens": $MAX_SOFT_TOKENS}"
+  --mm-processor-kwargs "{\"max_soft_tokens\": $MAX_SOFT_TOKENS}"
   --limit-mm-per-prompt "$MM_LIMITS"
   --async-scheduling
 )
