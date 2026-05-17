@@ -372,7 +372,7 @@ def _start(args: argparse.Namespace) -> int:
     try:
         _emit(f"Starting vllm with model {args.model} on port {args.vllm_port}...")
         vllm_pid = _spawn_process(
-            cmd=["bash", "scripts/start_gemma4.sh"],
+            cmd=[sys.executable, "scripts/start_gemma4.py"],
             env=vllm_env,
             cwd=repo_root,
             log_path=vllm_log,
