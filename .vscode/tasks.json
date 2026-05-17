@@ -1,0 +1,53 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Delete myspecs",
+			"type": "shell",
+			"command": "rm -rf myspecs",
+			"group": "build"
+		},
+		{
+			"label": "Delete notebooks",
+			"type": "shell",
+			"command": "rm -rf notebooks",
+			"group": "build"
+		},
+		{
+			"label": "Delete specs",
+			"type": "shell",
+			"command": "rm -rf specs",
+			"group": "build"
+		},
+		{
+			"label": "Delete Gemma4_(E2B)-Multimodal.ipynb",
+			"type": "shell",
+			"command": "rm notebooks/Gemma4_\\(E2B\\)-Multimodal.ipynb",
+			"group": "build"
+		},
+		{
+			"label": "Delete Gemma4_(E2B)_Unsloth.ipynb",
+			"type": "shell",
+			"command": "rm notebooks/Gemma4_\\(E2B\\)_Unsloth.ipynb",
+			"group": "build"
+		},
+		{
+			"label": "Delete TIPSV2Test.ipynb",
+			"type": "shell",
+			"command": "rm notebooks/TIPSV2Test.ipynb",
+			"group": "build"
+		},
+		{
+			"label": "Delete TIPSV2_Gemma4_Combined.ipynb",
+			"type": "shell",
+			"command": "rm notebooks/TIPSV2_Gemma4_Combined.ipynb",
+			"group": "build"
+		},
+		{
+			"label": "Delete kaggle_demo_bootstrap.ipynb",
+			"type": "shell",
+			"command": "rm notebooks/kaggle_demo_bootstrap.ipynb",
+			"group": "build"
+		}
+	]
+}
