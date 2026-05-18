@@ -39,9 +39,7 @@ GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.60}"
 TENSOR_PARALLEL="${TENSOR_PARALLEL:-1}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-1}"
 MAX_SOFT_TOKENS="${MAX_SOFT_TOKENS:-560}"
-VLLM_QUANTIZATION="${VLLM_QUANTIZATION:-fp8}"
 VLLM_EXTRA_ARGS="${VLLM_EXTRA_ARGS:-}"
-VLLM_DTYPE="${VLLM_DTYPE:-}"
 MM_LIMITS='{"image": 4, "audio": 5}'
 
 CMD=(
@@ -57,20 +55,9 @@ CMD=(
   --reasoning-parser gemma4
   --mm-processor-kwargs "{\"max_soft_tokens\": $MAX_SOFT_TOKENS}"
   --limit-mm-per-prompt "$MM_LIMITS"
+  --quantization fp8
   --async-scheduling
 )
-
-case "${VLLM_QUANTIZATION,,}" in
-  ""|none|off)
-    ;;
-  *)
-    CMD+=(--quantization "$VLLM_QUANTIZATION")
-    ;;
-esac
-
-if [ -n "$VLLM_DTYPE" ]; then
-  CMD+=(--dtype "$VLLM_DTYPE")
-fi
 
 if [ -n "$VLLM_EXTRA_ARGS" ]; then
   # shellcheck disable=SC2206
@@ -81,8 +68,7 @@ fi
 echo "Starting Gemma 4 server: $MODEL on port $PORT"
 echo "Using vllm binary: $VENV_VLLM"
 echo "Memory profile: gpu_mem_util=$GPU_MEM_UTIL max_model_len=$MAX_MODEL_LEN max_num_seqs=$MAX_NUM_SEQS max_soft_tokens=$MAX_SOFT_TOKENS"
-echo "Quantization: ${VLLM_QUANTIZATION:-<unset>}"
-echo "dtype: ${VLLM_DTYPE:-<default>}"
+echo "Quantization: fp8"
 echo "Extra args: ${VLLM_EXTRA_ARGS:-<none>}"
 
 exec "${CMD[@]}"

@@ -181,6 +181,28 @@ Logs/state are written to `/tmp/gemma_demo_logs/`:
 - `cloudflared.log`
 - `demo_state.json`
 
+### 2b. Manual alternative (without orchestrator)
+
+If you prefer to run services yourself, start them in separate terminals:
+
+1. Start vLLM:
+
+```bash
+scripts/start_gemma4.sh
+```
+
+2. Start the app:
+
+```bash
+APP_DISABLE_SSL=1 APP_PORT=7862 python app.py
+```
+
+3. If you have cloudflared installed, start a tunnel to the app:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:7862
+```
+
 ### 3. Check status
 
 ```bash
