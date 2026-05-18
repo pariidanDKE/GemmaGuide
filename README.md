@@ -24,7 +24,7 @@ Gemma Guide combines Gemma 4 and TIPSv2 into a grounded navigation system. Rathe
 
 ## Architecture Overview
 
-![Gemma Guide Architecture](data/images/arch_overview.png)
+![Gemma Guide Architecture](designs/app_showcase/arch_overview.png)
 
 ## Why Gemma 4
 

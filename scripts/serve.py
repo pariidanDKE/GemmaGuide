@@ -6,7 +6,6 @@ import json
 import os
 import platform
 import re
-import shlex
 import signal
 import shutil
 import subprocess
@@ -187,6 +186,20 @@ def _spawn_process(
     return proc.pid
 
 
+def _prefetch_tips_model(repo_root: Path) -> None:
+    """Download TIPS model artifacts ahead of first request."""
+    repo_str = str(repo_root)
+    if repo_str not in sys.path:
+        sys.path.insert(0, repo_str)
+
+    from pipeline.tips_runner import load_model
+
+    model = load_model()
+    get_backbone = getattr(model, "_get_backbone", None)
+    if callable(get_backbone):
+        get_backbone()
+
+
 def _load_state(state_path: Path) -> dict[str, Any]:
     if not state_path.exists():
         return {}
@@ -323,6 +336,7 @@ def _start(args: argparse.Namespace) -> int:
             "vllm_extra_args": args.vllm_extra_args,
             "dtype": args.dtype,
             "with_tunnel": args.with_tunnel,
+            "prefetch_tips": True,
         },
         "services": {},
         "urls": {
@@ -370,6 +384,10 @@ def _start(args: argparse.Namespace) -> int:
 
     launched: list[int] = []
     try:
+        _emit("Prefetching TIPS model artifacts...")
+        _prefetch_tips_model(repo_root)
+        _emit("TIPS prefetch complete")
+
         _emit(f"Starting vllm with model {args.model} on port {args.vllm_port}...")
         vllm_pid = _spawn_process(
             cmd=[sys.executable, "scripts/start_gemma4.py"],
