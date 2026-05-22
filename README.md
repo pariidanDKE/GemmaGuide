@@ -85,18 +85,18 @@ The current blocker is image-context forwarding into skill execution. Grounded m
 These screenshots show the grounded measurement path, not just chat output:
 
 ### Depth Map
-<img src="designs/app_showcase/depth_map.png" alt="Depth Map" width="420" />
+<img src="designs/app_showcase/depth_colormap_with_legend__ts-1779469897623.png" alt="Depth Map" width="420" />
 
 ### ADE Segmentation Grounding
-<img src="designs/app_showcase/ade_segment.png" alt="ADE Segmentation" width="420" />
+<img src="designs/app_showcase/segmentation_overlay__ts-1779469897623.png" alt="ADE Segmentation" width="420" />
 
 ### Measurement Targets
-<img src="designs/app_showcase/box_tv.png" alt="TV Bounding Region" width="260" />
-<img src="designs/app_showcase/box_chair.png" alt="Chair Bounding Region" width="260" />
-<img src="designs/app_showcase/box_armchair.png" alt="Armchair Bounding Region" width="260" />
+<img src="designs/app_showcase/measure_source_grid_dpt__class-armchair__ts-1779469901818.png" alt="TV Bounding Region" width="260" />
+<img src="designs/app_showcase/measure_source_grid_dpt__class-bag__ts-1779469901818.png" alt="Chair Bounding Region" width="260" />
+<img src="designs/app_showcase/measure_source_grid_dpt__class-box__ts-1779469901805.png" alt="Armchair Bounding Region" width="260" />
 
 ### Input for Navigator Agent
-<img src="designs/app_showcase/navigator_helper.png" alt="Navigator Output" width="420" />
+<img src="designs/app_showcase/navigator_annotated__ts-1779469905593.png" alt="Navigator Output" width="420" />
 
 ## Repository Layout
 
