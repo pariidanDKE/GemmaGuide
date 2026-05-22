@@ -10,8 +10,6 @@ Gemma Guide is a blind-first multimodal navigation assistant that combines Gemma
 
 For a blind user, the important question is not just what is in front of me, but how far away it is and how I should move safely. That is the gap between scene description and real navigation assistance. A useful system must do more than describe a scene in natural language; it must produce grounded spatial answers that guide movement in the real world.
 
-I followed the previous competition and was really moved by the story behind **Gemma Vision**. Their success highlighted the necessity of straightforward UX. I designed my system around those same core principles of extreme simplicity and audio-driven interaction, which allowed me to focus the technical heart of the project on **spatial grounding**.
-
 Language models are not reliable depth sensors, but with **Gemma 4**, they can act as an agent that identifies an object, calls specialized spatial tools, and turns grounded distance estimates into practical guidance. **Gemma Guide** is built to turn that idea into reality.
 
 ## The Solution
@@ -24,7 +22,7 @@ Gemma Guide combines Gemma 4 and TIPSv2 into a grounded navigation system. Rathe
 
 ## Architecture Overview
 
-![Gemma Guide Architecture](designs/app_showcase/arch_overview.png)
+![Gemma Guide Architecture](designs/app_showcase/architecure_overview.png)
 
 ## Why Gemma 4
 
